@@ -31,3 +31,4 @@ Also contains the output of the hydrodynamic simulations (**raw_datasets**: for 
 ## Environment setup
 
 The required libraries are in requirements.txt.
+Requires Python 3.10.
