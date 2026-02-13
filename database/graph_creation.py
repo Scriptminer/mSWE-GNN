@@ -470,11 +470,12 @@ def create_mesh_triangle(vertices, segments=None, holes=None, max_area=5, max_sm
 
     return mesh
 
-def create_mesh_dhydro(polygon_file='random_polygon.pol', number_of_multiscales=4,
-                       for_simulation=True):
+def create_mesh_dhydro(vertices, polygon_file='random_polygon.pol', number_of_multiscales=4,
+                       for_simulation=True, max_area=100, max_smallest_mesh_angle=30):
     '''Creates a fine mesh or a multiscale mesh using meshkernel
     
     ------
+    vertices: ndarray
     polygon_file: str, path-like
         path to the polygon file
     number_of_multiscales: int
@@ -482,12 +483,13 @@ def create_mesh_dhydro(polygon_file='random_polygon.pol', number_of_multiscales=
     for_simulation: bool
         if True, returns the fine mesh, otherwise returns the multiscale mesh
     '''
-    # mesh = create_mesh_triangle(vertices, segments=None, holes=None, max_area=max_area, max_smallest_mesh_angle=30)
-    # mesh2d = Mesh2d(node_x=np.array(mesh['vertices'][:,0], dtype=np.float64),
-    #             node_y=np.array(mesh['vertices'][:,1], dtype=np.float64),
-    #             edge_nodes=mesh['edges'].ravel())
-    # mk = MeshKernel()
-    # mk.mesh2d_set(mesh2d)
+    mesh = create_mesh_triangle(vertices, segments=None, holes=None, max_area=max_area, max_smallest_mesh_angle=max_smallest_mesh_angle)
+    mesh2d = Mesh2d(node_x=np.array(mesh['vertices'][:,0], dtype=np.float64),
+                node_y=np.array(mesh['vertices'][:,1], dtype=np.float64),
+                edge_nodes=mesh['edges'].ravel())
+    mk = MeshKernel()
+    mk.mesh2d_set(mesh2d)
+    print("TEST2.2")
 
     with open(polygon_file) as file:
         boundary_nodes = np.array([[value for value in line.strip().split(",")] for line in file.readlines()[2:]], dtype=np.double)
@@ -495,8 +497,8 @@ def create_mesh_dhydro(polygon_file='random_polygon.pol', number_of_multiscales=
     boundary_polygon = GeometryList(boundary_nodes[:,0].copy(), boundary_nodes[:,1].copy())
     meshes = []
 
-    mk = MeshKernel()
-    mk.mesh2d_make_triangular_mesh_from_polygon(boundary_polygon)
+    # mk = MeshKernel()
+    # mk.mesh2d_make_triangular_mesh_from_polygon(boundary_polygon)
 
     for i in range(number_of_multiscales):
         mk.mesh2d_compute_orthogonalization(ProjectToLandBoundaryOption(0), OrthogonalizationParameters(
@@ -722,6 +724,10 @@ class Mesh(object):
         self.face_y = mesh.face_y
 
         self.edge_index = mesh.edge_nodes.reshape(-1,2).T
+
+        self.edge_faces = mesh.edge_faces
+        self.edge_nodes = mesh.edge_nodes
+
         self.dual_edge_index = mesh.edge_faces.reshape(-1,2).T
         
         extra_face_bnd_mask = self.dual_edge_index[1,:] == -1
@@ -1606,10 +1612,10 @@ def create_mesh_dataset(dataset_folder, n_sim, start_sim=1,
     mesh_dataset = []
 
     for i in tqdm(range(start_sim,start_sim+n_sim)):
-        netcdf_file = f'{dataset_folder}/Simulations/output_{i}_map.nc'
-        DEM_file = f"{dataset_folder}\\DEM\\DEM_{i}.xyz"
-        hydrograph_file = f"{dataset_folder}\\Hydrograph\\Hydrograph_{i}.txt"
-        polygon_file = f"{dataset_folder}\\Geometry\\Polygon_{i}.pol"
+        netcdf_file = os.path.join(dataset_folder, 'Simulations', f'output_{i}_map.nc')
+        DEM_file = os.path.join(dataset_folder,'DEM',f'DEM_{i}.xyz')
+        hydrograph_file = os.path.join(dataset_folder, 'Hydrograph', f'Hydrograph_{i}.txt')
+        polygon_file = os.path.join(dataset_folder, 'Geometry', f'polygon_{i}.pol')
         BC = np.loadtxt(hydrograph_file)
         BC[:,0] /= 60 # convert to minutes
         
