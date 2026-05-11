@@ -18,6 +18,7 @@ from torch_geometric.data import Data
 from torch_geometric.utils import to_undirected
 from torch_geometric.utils import scatter
 from shapely.geometry import Polygon
+import shapely
 import xarray as xr
 from meshkernel import MeshKernel, Mesh2d, GeometryList, OrthogonalizationParameters, ProjectToLandBoundaryOption, MeshRefinementParameters
 from meshkernel import py_structures, DeleteMeshOption
@@ -470,12 +471,11 @@ def create_mesh_triangle(vertices, segments=None, holes=None, max_area=5, max_sm
 
     return mesh
 
-def create_mesh_dhydro(vertices, polygon_file='random_polygon.pol', number_of_multiscales=4,
-                       for_simulation=True, max_area=100, max_smallest_mesh_angle=30):
+def create_mesh_dhydro(polygon_file='random_polygon.pol', number_of_multiscales=4,
+                       for_simulation=True):
     '''Creates a fine mesh or a multiscale mesh using meshkernel
     
     ------
-    vertices: ndarray
     polygon_file: str, path-like
         path to the polygon file
     number_of_multiscales: int
@@ -483,28 +483,29 @@ def create_mesh_dhydro(vertices, polygon_file='random_polygon.pol', number_of_mu
     for_simulation: bool
         if True, returns the fine mesh, otherwise returns the multiscale mesh
     '''
-    mesh = create_mesh_triangle(vertices, segments=None, holes=None, max_area=max_area, max_smallest_mesh_angle=max_smallest_mesh_angle)
-    mesh2d = Mesh2d(node_x=np.array(mesh['vertices'][:,0], dtype=np.float64),
-                node_y=np.array(mesh['vertices'][:,1], dtype=np.float64),
-                edge_nodes=mesh['edges'].ravel())
-    mk = MeshKernel()
-    mk.mesh2d_set(mesh2d)
-    print("TEST2.2")
 
     with open(polygon_file) as file:
         boundary_nodes = np.array([[value for value in line.strip().split(",")] for line in file.readlines()[2:]], dtype=np.double)
 
+    perimeter = shapely.geometry.LineString(boundary_nodes)
+    boundary_nodes = np.array(shapely.segmentize(perimeter, max_segment_length=perimeter.length/25).coords.xy).T
+
     boundary_polygon = GeometryList(boundary_nodes[:,0].copy(), boundary_nodes[:,1].copy())
+    inner_boundary = Polygon(boundary_nodes).buffer(-0.01) # Boundary polygon which excludes boundary nodes
+    inner_boundary_polygon = GeometryList(np.array(inner_boundary.exterior.coords)[:,0], np.array(inner_boundary.exterior.coords)[:,1])
+    
     meshes = []
 
-    # mk = MeshKernel()
-    # mk.mesh2d_make_triangular_mesh_from_polygon(boundary_polygon)
+    mk = MeshKernel()
+    mk.mesh2d_make_triangular_mesh_from_polygon(boundary_polygon)
 
+    inner_boundary_polygon = boundary_polygon
+    
     for i in range(number_of_multiscales):
         mk.mesh2d_compute_orthogonalization(ProjectToLandBoundaryOption(0), OrthogonalizationParameters(
                     outer_iterations=25, boundary_iterations=25, inner_iterations=25, 
                     orthogonalization_to_smoothing_factor=0.975),
-                    boundary_polygon, boundary_polygon)
+                    boundary_polygon, inner_boundary_polygon)
         
         if i == number_of_multiscales-1:
             mk.mesh2d_delete_small_flow_edges_and_small_triangles(
@@ -692,7 +693,7 @@ class Mesh(object):
         self.boundary_edges = self.edge_index[:,self.edge_type > 1].T
         self.edge_BC = np.stack([np.where((edge==self.edge_index.T).sum(1) == 2) for edge in self.edge_index_BC]).reshape(-1)
 
-        face_bnd_mask = self.dual_edge_index[0,:] == -1
+        face_bnd_mask = self.dual_edge_index[0,:] == -1 # BC edge
         self.face_BC = self.dual_edge_index[1,face_bnd_mask]
 
         extra_face_bnd_mask = self.dual_edge_index[1,:] == -1
@@ -715,6 +716,7 @@ class Mesh(object):
         """
         assert isinstance(meshkernel_mesh, MeshKernel), 'Input mesh must be a MeshKernel object from meshkernel'
         mesh = meshkernel_mesh.mesh2d_get()
+        self.meshtmp = mesh
 
         self.node_x = mesh.node_x
         self.node_y = mesh.node_y
@@ -724,11 +726,11 @@ class Mesh(object):
         self.face_y = mesh.face_y
 
         self.edge_index = mesh.edge_nodes.reshape(-1,2).T
+        # if mesh.edge_faces.shape[0] % 2 != 0:
+        #     mesh.edge_faces = np.pad(mesh.edge_faces, (0,1), constant_values=-1)
+        self.dual_edge_index = mesh.edge_faces.reshape(-1,2).T
 
         self.edge_faces = mesh.edge_faces
-        self.edge_nodes = mesh.edge_nodes
-
-        self.dual_edge_index = mesh.edge_faces.reshape(-1,2).T
         
         extra_face_bnd_mask = self.dual_edge_index[1,:] == -1
         self.face_bnd = self.dual_edge_index[0,extra_face_bnd_mask]
@@ -1293,7 +1295,7 @@ def get_ghost_nodes(mesh):
 
 def find_BC_other_nodes(mesh):
     """Returns the coordinates of the nodes that are in the boundary faces but not in the boundary edges"""
-    assert mesh.face_BC is not [], "The boundary faces face_BC must be known"
+    assert mesh.face_BC is not [] and len(mesh.face_BC) > 0, "The boundary faces face_BC must be known"
 
     BC_edge_index = []
     the_other_node = [] # the nodes which is not in the BC edge
