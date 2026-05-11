@@ -5,7 +5,7 @@ dataset_parameters:
   train_dataset_name: 'multiscale_mesh_dataset2'
   train_size        : 5
   val_prcnt         : 0.25
-  test_dataset_name : 'multiscale_mesh_dataset2'
+  test_dataset_name : 'dyce_0'
   seed              : 381
 
 # Scaler options: null, 'minmax', 'minmax_neg', or 'standard'
@@ -43,7 +43,7 @@ models:
   model_type              : 'MSGNN'
   hid_features            : 64
   mlp_layers              : 3
-  seed                    : 1
+  seed                    : 381
   learned_residuals       : True
   mlp_activation          : 'prelu'
   gnn_activation          : 'tanh'
@@ -74,8 +74,8 @@ lr_info:
   gamma           : 0.7
   step_size       : 20
 
-# temporal_test_dataset_parameters:
-#   time_start  : 1
-#   time_stop   : -1
+#temporal_test_dataset_parameters: 
+    #time_start  : 0
+    #time_stop   : -1
 
 saved_model: 'results/Pareto_front/models/K4_F64.h5' # specify the model to be tested 
