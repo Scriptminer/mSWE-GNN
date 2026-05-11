@@ -186,20 +186,23 @@ class LightningTrainer(L.LightningModule):
 
 class DataModule(L.LightningDataModule):
     def __init__(self, temporal_train_dataset, temporal_val_dataset, 
-                 batch_size: int = 8):
+                 batch_size: int = 8, train_dataloader_params: dict = {},
+                 val_dataloader_params: dict = {}):
         super().__init__()
         self.batch_size = batch_size
         self.temporal_train_dataset = temporal_train_dataset
         self.temporal_val_dataset = temporal_val_dataset
+        self.train_dataloader_params = train_dataloader_params
+        self.val_dataloader_params = val_dataloader_params
 
     def train_dataloader(self):
         return DataLoader(self.temporal_train_dataset, batch_size=self.batch_size, 
-                        #   num_workers=32, 
+                          **self.train_dataloader_params,
                           shuffle=True)
 
     def val_dataloader(self):
         return DataLoader(self.temporal_val_dataset, batch_size=self.batch_size, 
-                        #   num_workers=32, 
+                          **self.val_dataloader_params,
                           shuffle=False)
 
     def setup(self, stage=None):

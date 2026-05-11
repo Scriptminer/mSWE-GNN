@@ -1,5 +1,5 @@
-ffmpeg==1.4
-ffmpeg-python==0.2.0
+
+#ffmpeg-python==0.2.0
 fiona==1.9.6
 ipykernel==6.26.0
 ipython==8.16.1
@@ -10,7 +10,7 @@ meshkernel==3.0.0
 netCDF4==1.6.4
 networkx==3.2
 numba==0.59.0
-numpy==1.23.2
+numpy==1.23.5
 opencv-python==4.8.1.78
 pandas==2.1.1
 perlin-noise==1.12

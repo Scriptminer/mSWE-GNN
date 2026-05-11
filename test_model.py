@@ -108,7 +108,7 @@ def main(config):
 
 if __name__ == '__main__':
     # Read configuration file with parameters
-    cfg = read_config('config_finetune.yaml')
+    cfg = read_config('config_dyce.yaml')
 
     wandb_logger = WandbLogger(
         mode='disabled',

@@ -86,12 +86,15 @@ def get_numerical_times(dataset_name, dataset_size, temporal_res, maximum_time,
     dijk15_train_id = numerical_simulation_overview['seed'].isin([101])
     dijk15_test_id = numerical_simulation_overview['seed'].isin(np.arange(102,112))
 
+    dyce_test_id = numerical_simulation_overview['seed'].isin([0])
+
     dataset_ids = {'mesh_dataset_train': mesh_dataset_train_id,
                    'mesh_dataset_test': mesh_dataset_test_id,
                    'multiscale_mesh_dataset_train': mesh_dataset_train_id,
-                   'multiscale_mesh_dataset_test': mesh_dataset_test_id,
+                   'multiscale_mesh_dataset2_test': mesh_dataset_test_id,
                    'dijkring_15_train': dijk15_train_id,
                    'dijkring_15_test': dijk15_test_id,
+                   'dyce_0': dyce_test_id,
                    }
 
     ids = dataset_ids.get(dataset_name)

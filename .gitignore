@@ -4,7 +4,12 @@
 *.txt
 *.pol
 *.nc
+*.mp4
 __pycache__
 *.pyc
 lightning_logs
+<<<<<<< Updated upstream
 wandb
+=======
+wandb
+>>>>>>> Stashed changes
