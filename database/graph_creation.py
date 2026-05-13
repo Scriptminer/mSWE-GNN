@@ -489,17 +489,13 @@ def create_mesh_dhydro(polygon_file='random_polygon.pol', number_of_multiscales=
 
     perimeter = shapely.geometry.LineString(boundary_nodes)
     boundary_nodes = np.array(shapely.segmentize(perimeter, max_segment_length=perimeter.length/25).coords.xy).T
-
     boundary_polygon = GeometryList(boundary_nodes[:,0].copy(), boundary_nodes[:,1].copy())
     inner_boundary = Polygon(boundary_nodes).buffer(-0.01) # Boundary polygon which excludes boundary nodes
-    inner_boundary_polygon = GeometryList(np.array(inner_boundary.exterior.coords)[:,0], np.array(inner_boundary.exterior.coords)[:,1])
-    
+    inner_boundary_polygon = GeometryList(np.array(inner_boundary.exterior.coords)[:,0].copy(), np.array(inner_boundary.exterior.coords)[:,1].copy())
     meshes = []
 
     mk = MeshKernel()
     mk.mesh2d_make_triangular_mesh_from_polygon(boundary_polygon)
-
-    inner_boundary_polygon = boundary_polygon
     
     for i in range(number_of_multiscales):
         mk.mesh2d_compute_orthogonalization(ProjectToLandBoundaryOption(0), OrthogonalizationParameters(
