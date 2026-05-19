@@ -70,7 +70,7 @@ def WD_to_FAT(WD, temporal_res, water_threshold=0, time_start=0):
 def get_numerical_times(dataset_name, dataset_size, temporal_res, maximum_time,
                         overview_file='database/raw_datasets/overview.csv',
                         **temporal_test_dataset_parameters):
-
+    print("DATASET NAME", dataset_name)
     time_start = temporal_test_dataset_parameters['time_start']
     time_stop = temporal_test_dataset_parameters['time_stop']
 
@@ -86,15 +86,14 @@ def get_numerical_times(dataset_name, dataset_size, temporal_res, maximum_time,
     dijk15_train_id = numerical_simulation_overview['seed'].isin([101])
     dijk15_test_id = numerical_simulation_overview['seed'].isin(np.arange(102,112))
 
-    dyce_test_id = numerical_simulation_overview['seed'].isin([0])
-
+    dyce_0_test_id = numerical_simulation_overview['seed'].isin([0])
     dataset_ids = {'mesh_dataset_train': mesh_dataset_train_id,
                    'mesh_dataset_test': mesh_dataset_test_id,
-                   'multiscale_mesh_dataset_train': mesh_dataset_train_id,
+                   'multiscale_mesh_dataset2_train': mesh_dataset_train_id,
                    'multiscale_mesh_dataset2_test': mesh_dataset_test_id,
-                   'dijkring_15_train': dijk15_train_id,
-                   'dijkring_15_test': dijk15_test_id,
-                   'dyce_0': dyce_test_id,
+                   'dijkring_15_big_train': dijk15_train_id,
+                   'dijkring_15_big_test': dijk15_test_id,
+                   'dyce_0_test': dyce_0_test_id,
                    }
 
     ids = dataset_ids.get(dataset_name)
