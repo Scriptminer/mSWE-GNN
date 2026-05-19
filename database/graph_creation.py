@@ -1577,27 +1577,31 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
     
     data.node_BC = torch.IntTensor(mesh.ghost_cells_ids)
     data.edge_BC_length = torch.FloatTensor(mesh.edge_length[mesh.edge_BC])
+    print("DATA NODE BC before", data.node_BC)
     if with_multiscale:
         data.node_BC = data.node_BC[:len(mesh.ghost_cells_ids)//number_of_multiscales] # select BC only at the finest scale
         data.edge_BC_length = data.edge_BC_length[:len(mesh.ghost_cells_ids)//number_of_multiscales] # select BC+edge only at the finest scale
+    print("DATA NODE BC after", data.node_BC)
     data.BC = torch.FloatTensor(BC).unsqueeze(0).repeat(len(data.node_BC), 1, 1) # This repeats the same BC
+    print("DATA BC torchified", data.BC)
     data.type_BC = torch.tensor(type_BC, dtype=torch.int)
 
     return data
 
-def create_mesh_dataset(dataset_folder, n_sim, start_sim=1, 
+def create_mesh_dataset(dataset_folder, sim_ids=[], 
                         with_multiscale=False, number_of_multiscales=4,
-                        neighborhood_size_slope=150, min_neighbours_slope=9):
+                        neighborhood_size_slope=150, min_neighbours_slope=9,
+                        netcdf_file_template='output_{}_map.nc', DEM_file_template='dyce_lisfloodfp',
+                        hydrograph_file_template='Hydrograph_{}.txt', polygon_file_template='dyce_polygon.pol'
+                        ):
     '''
     Creates a list of pytorch geometric Data objects with n_sim simulations
     returns a mesh dataset
     ------
     dataset_folder: str, path-like
         path to raw dataset location
-    n_sim: int
-        number of simulations used in the dataset creation
-    start_sim: int
-        starting simulation id
+    sim_ids: list
+        list of simulation ids to include in the dataset
     with_multiscale: bool
         if True, data.mesh is a list of multiscale meshes
     number_of_multiscales: int
@@ -1609,18 +1613,24 @@ def create_mesh_dataset(dataset_folder, n_sim, start_sim=1,
     '''
     mesh_dataset = []
 
-    for i in tqdm(range(start_sim,start_sim+n_sim)):
-        netcdf_file = os.path.join(dataset_folder, 'Simulations', f'output_{i}_map.nc')
-        DEM_file = os.path.join(dataset_folder,'DEM',f'DEM_{i}.xyz')
-        hydrograph_file = os.path.join(dataset_folder, 'Hydrograph', f'Hydrograph_{i}.txt')
-        polygon_file = os.path.join(dataset_folder, 'Geometry', f'polygon_{i}.pol')
+    for i in tqdm(sim_ids):
+        netcdf_file = os.path.join(dataset_folder, 'Simulations', netcdf_file_template.format(i))
+        DEM_file = os.path.join(dataset_folder,'DEM',DEM_file_template.format(i))
+        hydrograph_file = os.path.join(dataset_folder, 'Hydrograph', hydrograph_file_template.format(i))
+        polygon_file = os.path.join(dataset_folder, 'Geometry', polygon_file_template.format(i))
         BC = np.loadtxt(hydrograph_file)
         BC[:,0] /= 60 # convert to minutes
-        
+
+        if netcdf_file.endswith(".zst"):
+            os.system(f"zstd -d {netcdf_file}")
+            netcdf_file = netcdf_file.rstrip(".zst")
+
         data = convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file, type_BC=2,
                         with_multiscale=with_multiscale, number_of_multiscales=number_of_multiscales,
                         neighborhood_size_slope=neighborhood_size_slope, 
                         min_neighbours_slope=min_neighbours_slope)
+        
+        os.remove(netcdf_file) # remove the uncompressed netcdf file to save space
 
         mesh_dataset.append(data)
     
