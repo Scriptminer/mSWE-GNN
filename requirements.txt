@@ -4,7 +4,7 @@ fiona==1.9.6
 ipykernel==6.26.0
 ipython==8.16.1
 lightning==2.0.9.post0
-matplotlib==3.8.0
+matplotlib==3.7.3
 matplotlib-inline==0.1.6
 meshkernel==3.0.0
 netCDF4==1.6.4

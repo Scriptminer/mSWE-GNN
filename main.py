@@ -15,6 +15,8 @@ from utils.visualization import PlotRollout
 from utils.miscellaneous import get_numerical_times, get_speed_up, get_model, SpatialAnalysis, fix_dict_in_config
 from training.train import LightningTrainer, DataModule, CurriculumLearning
 
+import h5py
+
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision('high')
@@ -117,6 +119,10 @@ def main(config):
     
     # Train and get trained model
     trainer.fit(plmodule, pldatamodule)
+    print("Saving model")
+    with h5py.File("model.h5", "w") as f:
+        for name, param in model.state_dict().items():
+            f.create_dataset(name, data=param.cpu().numpy())
 
     # Load the best model checkpoint
     plmodule = plmodule.load_from_checkpoint(checkpoint_callback.best_model_path, map_location=device, **plmodule_kwargs)
@@ -184,7 +190,8 @@ def main(config):
 
 if __name__ == '__main__':
     # Read configuration file with parameters
-    cfg = read_config('config.yaml')
+    cfg = read_config('config_lisfloodfp_cpu_dyce.yaml')
+    #cfg = read_config('config_dyce.yaml')
 
     wandb_logger = WandbLogger(
         log_model=True,
