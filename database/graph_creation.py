@@ -19,7 +19,9 @@ from torch_geometric.utils import to_undirected
 from torch_geometric.utils import scatter
 from shapely.geometry import Polygon
 import shapely
+import shutil
 import xarray as xr
+import zarr
 from meshkernel import MeshKernel, Mesh2d, GeometryList, OrthogonalizationParameters, ProjectToLandBoundaryOption, MeshRefinementParameters
 from meshkernel import py_structures, DeleteMeshOption
 
@@ -712,7 +714,6 @@ class Mesh(object):
         """
         assert isinstance(meshkernel_mesh, MeshKernel), 'Input mesh must be a MeshKernel object from meshkernel'
         mesh = meshkernel_mesh.mesh2d_get()
-        self.meshtmp = mesh
 
         self.node_x = mesh.node_x
         self.node_y = mesh.node_y
@@ -882,7 +883,6 @@ class MultiscaleMesh(Mesh):
 
         # stack edge attributes
         self.edge_type = np.concatenate([mesh.edge_type for mesh in meshes])
-
         # stack edge indexes
         edge_index = [meshes[0].edge_index]
         dual_edge_index = [meshes[0].dual_edge_index]
@@ -892,7 +892,6 @@ class MultiscaleMesh(Mesh):
             edge_index.append(mesh.edge_index + edge_index[i].max() + 1)
             dual_edge_index.append(mesh.dual_edge_index + dual_edge_index[i].max() + 1)
             face_nodes.append(mesh.face_nodes + face_nodes[i].max() + 1)
-            
         self.edge_index = np.concatenate(edge_index, 1)
         self.dual_edge_index = np.concatenate(dual_edge_index, 1)
         self.face_nodes = np.concatenate(face_nodes)
@@ -1486,7 +1485,8 @@ def update_ghost_cells_attributes(mesh, *attributes):
 
 def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
                         with_multiscale=False, number_of_multiscales=4,
-                        neighborhood_size_slope=150, min_neighbours_slope=5):
+                        neighborhood_size_slope=150, min_neighbours_slope=5,
+                        multiscale_mesh_file=None):
     '''
     Creates a pytorch geometric Data object of a mesh simulation
     ------
@@ -1503,11 +1503,13 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
     with_multiscale: bool
         if True, data.mesh is a list of multiscale meshes
     number_of_multiscales: int
-        number of multiscale meshes (default 4)
+        number of multiscale meshes (default 4).
     neighborhood_size_slope: float
         radius around a point that determines which points account for local slope
     min_neighbours_slope: int
         minimum number of neighbours in slope evaluation
+    multiscale_mesh_file: str, path-like
+        path to MultiscaleMesh pickle file (if None, this will be recalculated from polygon file)
     '''
     data = Data()
 
@@ -1527,21 +1529,24 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
     if with_multiscale:
         assert polygon_file is not None, 'polygon_file must be provided if with_multiscale is True'
         # create multiscale meshes
-        meshes = create_mesh_dhydro(polygon_file, number_of_multiscales-1, for_simulation=False)
-        meshes.append(copy(meshes[0]))
-        meshes[-1]._import_from_map_netcdf(netcdf_file)
-        meshes[-1].edge_outward_normal[meshes[-1].edge_BC] *= -1  # reverse the normal of the boundary edges
-        meshes = meshes[::-1]
+        if multiscale_mesh_file is not None:
+            with open(multiscale_mesh_file, 'rb') as f:
+                mesh = pickle.load(f)
+        else:
+            meshes = create_mesh_dhydro(polygon_file, number_of_multiscales-1, for_simulation=False)
+            meshes.append(copy(meshes[0]))
+            meshes[-1]._import_from_map_netcdf(netcdf_file)
+            meshes[-1].edge_outward_normal[meshes[-1].edge_BC] *= -1  # reverse the normal of the boundary edges
+            meshes = meshes[::-1]
 
-        # Add boundary conditions to multiscale meshes
-        edge_BC_mid = mesh.node_xy[mesh.edge_index_BC].mean(1)
-        meshes = interpolate_BC_location_multiscale(meshes, edge_BC_mid)
-        meshes = [add_ghost_cells_mesh(mesh) for mesh in meshes]
-        DEM, WD, VX, VY = add_ghost_cells_attributes(meshes[0], DEM, WD, VX, VY)
+            # Add boundary conditions to multiscale meshes
+            edge_BC_mid = mesh.node_xy[mesh.edge_index_BC].mean(1)
+            meshes = interpolate_BC_location_multiscale(meshes, edge_BC_mid)
+            meshes = [add_ghost_cells_mesh(mesh) for mesh in meshes]
 
-        # create multiscale mesh
-        mesh = MultiscaleMesh()
-        mesh.stack_meshes(meshes)
+            # create multiscale mesh
+            mesh = MultiscaleMesh()
+            mesh.stack_meshes(meshes)
 
         data.node_ptr = torch.LongTensor(mesh.face_ptr)
         data.edge_ptr = torch.LongTensor(mesh.dual_edge_ptr)
@@ -1550,6 +1555,7 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
         
         # get multiscale attributes
         # mesh.DEM, WD, VX, VY = interpolate_multiscale_attributes(meshes, DEM, WD, VX, VY, method='nearest')
+        DEM, WD, VX, VY = add_ghost_cells_attributes(mesh.meshes[0], DEM, WD, VX, VY) # Was originally immediately before mesh.stack_meshes(meshes), but placing it here is logically equivalent
         mesh.DEM, WD, VX, VY = pool_multiscale_attributes(mesh, DEM, WD, VX, VY, reduce='mean')
         mesh.DEM = update_ghost_cells_attributes(mesh, mesh.DEM)[0] #correct ghost cells values after pooling
     else:
@@ -1577,13 +1583,11 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
     
     data.node_BC = torch.IntTensor(mesh.ghost_cells_ids)
     data.edge_BC_length = torch.FloatTensor(mesh.edge_length[mesh.edge_BC])
-    print("DATA NODE BC before", data.node_BC)
+    
     if with_multiscale:
         data.node_BC = data.node_BC[:len(mesh.ghost_cells_ids)//number_of_multiscales] # select BC only at the finest scale
         data.edge_BC_length = data.edge_BC_length[:len(mesh.ghost_cells_ids)//number_of_multiscales] # select BC+edge only at the finest scale
-    print("DATA NODE BC after", data.node_BC)
     data.BC = torch.FloatTensor(BC).unsqueeze(0).repeat(len(data.node_BC), 1, 1) # This repeats the same BC
-    print("DATA BC torchified", data.BC)
     data.type_BC = torch.tensor(type_BC, dtype=torch.int)
 
     return data
@@ -1592,7 +1596,8 @@ def create_mesh_dataset(dataset_folder, sim_ids=[],
                         with_multiscale=False, number_of_multiscales=4,
                         neighborhood_size_slope=150, min_neighbours_slope=9,
                         netcdf_file_template='output_{}_map.nc', DEM_file_template='dyce_lisfloodfp',
-                        hydrograph_file_template='Hydrograph_{}.txt', polygon_file_template='dyce_polygon.pol'
+                        hydrograph_file_template='Hydrograph_{}.txt', polygon_file_template='dyce_polygon.pol',
+                        multiscale_mesh_file=None
                         ):
     '''
     Creates a list of pytorch geometric Data objects with n_sim simulations
@@ -1605,14 +1610,15 @@ def create_mesh_dataset(dataset_folder, sim_ids=[],
     with_multiscale: bool
         if True, data.mesh is a list of multiscale meshes
     number_of_multiscales: int
-        number of multiscale meshes (default 4)
+        number of multiscale meshes (default 4).
     neighborhood_size_slope: float
         radius around a point that determines which points account for local slope
     min_neighbours_slope: int
         minimum number of neighbours in slope evaluation
+    multiscale_mesh_file: str, path-like
+        path to MultiscaleMesh pickle file (if None, this will be recalculated from polygon file)
     '''
     mesh_dataset = []
-
     for i in tqdm(sim_ids):
         netcdf_file = os.path.join(dataset_folder, 'Simulations', netcdf_file_template.format(i))
         DEM_file = os.path.join(dataset_folder,'DEM',DEM_file_template.format(i))
@@ -1620,17 +1626,15 @@ def create_mesh_dataset(dataset_folder, sim_ids=[],
         polygon_file = os.path.join(dataset_folder, 'Geometry', polygon_file_template.format(i))
         BC = np.loadtxt(hydrograph_file)
         BC[:,0] /= 60 # convert to minutes
-
         if netcdf_file.endswith(".zst"):
-            os.system(f"zstd -d {netcdf_file}")
+            os.system(f"zstd -df {netcdf_file}")
             netcdf_file = netcdf_file.rstrip(".zst")
-
         data = convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file, type_BC=2,
                         with_multiscale=with_multiscale, number_of_multiscales=number_of_multiscales,
                         neighborhood_size_slope=neighborhood_size_slope, 
-                        min_neighbours_slope=min_neighbours_slope)
-        
-        os.remove(netcdf_file) # remove the uncompressed netcdf file to save space
+                        min_neighbours_slope=min_neighbours_slope, multiscale_mesh_file=multiscale_mesh_file)
+        if netcdf_file.endswith(".zst"):
+            os.remove(netcdf_file) # remove the uncompressed netcdf file to save space
 
         mesh_dataset.append(data)
     
@@ -1692,26 +1696,72 @@ def create_dataset_folders(dataset_folder='datasets'):
         os.makedirs(test_folder)
 
 
-def save_database(dataset, name, out_path='datasets'):
+def save_database(dataset, name, out_path='datasets', zarr_output=False, skip_pickle=False, skip_mesh=False):
     '''
     This function saves the geometric database into a pickle file
     The name of the file is given by the type of graph and number of simulations
     ------
     dataset: list
         list of geometric datasets for grid and mesh
-    names: str
+    name: str
         name of saved dataset
     out_path: str, path-like
         output file location
+    zarr_output: bool
+        if True, saves the WD, VX, VY attributes in a zarr file (useful for large datasets).
+        dataset must be a single file, not a list of files.
+    skip_pickle: bool
+        if True, skips saving the dataset as a pickle file. If zarr_output is True, only zarr
+        will be saved. If zarr_output is False, nothing will be saved.
+    skip_mesh: bool
+        if True, the mesh will not be included in the pickle file.
     '''
     n_sim = len(dataset)
-    path = f"{out_path}/{name}.pkl"
-    
+    base_path = os.path.join(out_path, name)
+    path = f"{base_path}.pkl"
+
     if os.path.exists(path):
         os.remove(path)
+        if zarr_output and os.path.exists(f"{base_path}.zarr"):
+            shutil.rmtree(f"{base_path}.zarr")
     elif not os.path.exists(out_path):
         os.mkdir(out_path)
     
-    pickle.dump(dataset, open(path, "wb" ))
+    if zarr_output:
+        zarr_variables = ['WD', 'VX', 'VY']
+        export_zarr_dataset(dataset, f"{base_path}.zarr", zarr_variables)
+        if not skip_pickle:
+            # Remove zarr variables from dataset to be saved
+            ds_copy = copy(dataset)
+            for var in zarr_variables:
+                if hasattr(ds_copy, var):
+                    delattr(ds_copy, var)
+            pickle.dump(ds_copy, open(f"{base_path}.pkl", "wb"))
+    else:
+        if not skip_pickle:
+            pickle.dump(dataset, open(path, "wb"))
         
     return None
+
+def export_zarr_dataset(dataset, path, zarr_variables=['WD', 'VX', 'VY', 'BC']):
+    """Exports the specified variables of a dataset to a zarr file at the given path.
+
+    dataset: Data
+        the dataset containing the variables to export
+    path: str, path-like
+        the path where the zarr file will be saved
+    zarr_variables: list of str
+        list of variable names to export to zarr
+    """
+    ds = { var: xr.DataArray(dataset[var]).rename({"dim_0":"nFaces", "dim_1":"time"}) for var in ["WD","VX","VY"] }
+    ds.update({"BC": xr.DataArray(dataset["BC"]).rename({"dim_1":"time"})})
+    zarr_dataset = xr.Dataset(ds)
+    encoding = {"compressor":zarr.codecs.zstd.ZstdCodec(level=19), "scale_factor":0.001, "dtype":"int16", "filters":[zarr.codecs.Delta(dtype="int16")]}
+
+    zarr_dataset = zarr_dataset.chunk({"time":64}) # Time chunks of 64 yields chunksizes of ~1MB. Aiming for the largest chunksize where reads (from a network drive) will still be seek-limited (the application favours small chunk sizes for random access)
+
+    zarr_dataset.to_zarr(
+        path,
+        encoding={var: encoding for var in zarr_variables},
+        mode="w" # Overwrite if zarr already exists
+    )
