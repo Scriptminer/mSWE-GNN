@@ -1,15 +1,20 @@
 # Libraries
+import copy
 import numpy as np
+import pickle
 import torch
 import torch.optim as optim
 import lightning as L
 from lightning.pytorch.callbacks import Callback, BatchSizeFinder
 from torch_geometric.loader import DataLoader
 from torch_geometric.data.batch import Batch
+import torch_geometric.data.Dataset
+import xarray as xr
 
 from training.loss import loss_function
 from utils.miscellaneous import get_rollout_loss, get_CSI
-from utils.dataset import use_prediction, apply_boundary_condition
+from utils.dataset import use_prediction, apply_boundary_condition, create_data_attr, to_temporal_dataset
+from utils.scaling import get_scalers
 
 def adapt_batch_training(batch):
     """Corrects batch features for multiscale batches and so that there are also less if/else conditions later on"""
@@ -183,6 +188,35 @@ class LightningTrainer(L.LightningModule):
         predicted_rollout = rollout_test(self.model, batch)
         return [predicted_rollout[batch.ptr[i]:batch.ptr[i+1]] 
                 for i in range(batch.num_graphs)]
+
+class Dataset(torch_geometric.data.Dataset):
+    def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, dataset_parameters=None, temporal_dataset_parameters=None, device="cpu", simulation_names=[], mesh_common_file=""):
+        print("Warning: not yet implemented all parameters from dataset.py, create_model_dataset()")
+        if device == "cpu":
+            print("Warning: using device CPU for dataset")
+        self.dataset_parameters = dataset_parameters
+        self.temporal_dataset_parameters = temporal_dataset_parameters
+        self.device = device
+        self.simulation_names = simulation_names
+        with open(mesh_common_file, "rb") as f:
+            self.mesh_common = pickle.load(f)
+        super().__init__(root, transform, pre_transform, pre_filter)
+    
+    def get(self, idx):
+        data = copy.deepcopy(self.mesh_common)
+        zarr_data = xr.open_dataset(f"{self.simulation_names[idx]}.zarr")
+        for data_var in zarr_data.data_vars:
+            data[data_var] = torch.FloatTensor(zarr_data[data_var])
+        
+        scalers = get_scalers([data], scalers)
+        # Create x, edge_attr, y
+        dataset = create_data_attr([data], scalers=scalers, device=self.device, **self.dataset_parameters)
+        temporal_dataset = to_temporal_dataset(dataset, **self.temporal_dataset_parameters)
+        return temporal_dataset[0]
+
+    def len(self):
+        return len(self.simulation_names)
+
 
 class DataModule(L.LightningDataModule):
     def __init__(self, temporal_train_dataset, temporal_val_dataset, 
