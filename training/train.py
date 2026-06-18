@@ -1,5 +1,6 @@
 # Libraries
 import copy
+import os
 import numpy as np
 import pickle
 import torch
@@ -8,12 +9,12 @@ import lightning as L
 from lightning.pytorch.callbacks import Callback, BatchSizeFinder
 from torch_geometric.loader import DataLoader
 from torch_geometric.data.batch import Batch
-import torch_geometric.data.Dataset
+import torch_geometric.data
 import xarray as xr
 
 from training.loss import loss_function
 from utils.miscellaneous import get_rollout_loss, get_CSI
-from utils.dataset import use_prediction, apply_boundary_condition, create_data_attr, to_temporal_dataset
+from utils.dataset import use_prediction, apply_boundary_condition, create_data_attr, to_temporal, get_temporal_samples_size
 from utils.scaling import get_scalers
 
 def adapt_batch_training(batch):
@@ -189,33 +190,62 @@ class LightningTrainer(L.LightningModule):
         return [predicted_rollout[batch.ptr[i]:batch.ptr[i+1]] 
                 for i in range(batch.num_graphs)]
 
-class Dataset(torch_geometric.data.Dataset):
-    def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, dataset_parameters=None, temporal_dataset_parameters=None, device="cpu", simulation_names=[], mesh_common_file=""):
+
+class ZarrDataset(torch_geometric.data.Dataset):
+    def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, dataset_parameters=None, temporal_dataset_parameters=None, selected_node_features=None, selected_edge_features=None, scalers=None, device="cpu", dataset_path="", dataset_names=[], mesh_common_file=""):
         print("Warning: not yet implemented all parameters from dataset.py, create_model_dataset()")
         if device == "cpu":
             print("Warning: using device CPU for dataset")
         self.dataset_parameters = dataset_parameters
-        self.temporal_dataset_parameters = temporal_dataset_parameters
+        
+        self.previous_t = temporal_dataset_parameters["previous_t"]
+        self.rollout_steps = temporal_dataset_parameters["rollout_steps"]
+        self.time_start = temporal_dataset_parameters["previous_t"] - 1 # Override time_start and time_stop to extract a single data object
+        self.time_stop = -1
+
+        self.selected_node_features = selected_node_features
+        self.selected_edge_features = selected_edge_features
+        self.scalers = scalers
+
         self.device = device
-        self.simulation_names = simulation_names
+
+        self.dataset_zarrs = [xr.open_dataset(os.path.join(dataset_path, f"{dataset_name}.zarr")) for dataset_name in dataset_names] # Lazy-load all zarr datasets
+        self.dataset_lengths = [
+            ds.WD.shape[1] - (self.previous_t-1) - self.rollout_steps
+            for ds in self.dataset_zarrs
+        ]
+        self.start_indices = np.cumsum([0] + self.dataset_lengths[:-1]) # Overall index of the first item of each simulation dataset, treating datasets as if concatenated in order
+        
         with open(mesh_common_file, "rb") as f:
             self.mesh_common = pickle.load(f)
+        
         super().__init__(root, transform, pre_transform, pre_filter)
     
     def get(self, idx):
+        # Find mesh data
         data = copy.deepcopy(self.mesh_common)
-        zarr_data = xr.open_dataset(f"{self.simulation_names[idx]}.zarr")
-        for data_var in zarr_data.data_vars:
-            data[data_var] = torch.FloatTensor(zarr_data[data_var])
+        scalers = get_scalers([data], copy.copy(self.scalers))
+
+        # Find Zarr data
+        dataset_idx = np.searchsorted(self.start_indices, idx, side="right") - 1 # Index in self.dataset_zarrs of the dataset containing the desired item at overall index idx
+        zarr_data = self.dataset_zarrs[dataset_idx]  # Dataset zarr file containing zarr data for the desired item
+        internal_idx = idx - self.start_indices[dataset_idx] # Index of desired item within zarr_data
+        n_timesteps = self.previous_t + self.rollout_steps
         
-        scalers = get_scalers([data], scalers)
+        for data_var in zarr_data.data_vars:
+            data[data_var] = torch.FloatTensor(zarr_data[data_var][:, internal_idx : internal_idx+n_timesteps].data) # Extract only the required part of the Zarr file
+        
         # Create x, edge_attr, y
-        dataset = create_data_attr([data], scalers=scalers, device=self.device, **self.dataset_parameters)
-        temporal_dataset = to_temporal_dataset(dataset, **self.temporal_dataset_parameters)
-        return temporal_dataset[0]
+        dataset = create_data_attr([data], scalers=scalers, device=self.device, **self.dataset_parameters, **self.selected_node_features, **self.selected_edge_features)[0]
+
+        # Convert to single temporal data object
+        temporal_data = to_temporal(dataset, self.previous_t, self.time_start, self.time_stop, self.rollout_steps)[0]
+        temporal_data.time += internal_idx # Time correction
+        return temporal_data
 
     def len(self):
-        return len(self.simulation_names)
+        return sum(self.dataset_lengths)
+
 
 
 class DataModule(L.LightningDataModule):
