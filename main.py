@@ -1,4 +1,6 @@
 # Libraries
+import json
+import pickle
 import torch
 import wandb
 import time
@@ -13,13 +15,15 @@ from utils.dataset import get_temporal_test_dataset_parameters
 from utils.load import read_config
 from utils.visualization import PlotRollout
 from utils.miscellaneous import get_numerical_times, get_speed_up, get_model, SpatialAnalysis, fix_dict_in_config
-from training.train import LightningTrainer, DataModule, CurriculumLearning
+from training.train import LightningTrainer, DataModule, CurriculumLearning, ZarrDataset
 
 import h5py
 
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision('high')
+
+NUM_WORKERS = torch.get_num_threads()
 
 def main(config):
     L.seed_everything(config.models['seed'])
@@ -30,16 +34,44 @@ def main(config):
     scalers = config.scalers
     selected_node_features = config.selected_node_features
     selected_edge_features = config.selected_edge_features
+    
+    with open("./database/datasets/train/dyce/test_train_split.json") as f:
+        names_split = json.load(f)
+    train_val_split = int(len(names_split["train"]) * (1-config['dataset_parameters']['val_prcnt']))
+    train_names = names_split["train"][:train_val_split]
+    val_names = names_split["train"][train_val_split:]
+    test_names = names_split["test"]
+    
+    datasets = []
+    for name, dataset_names in [("train", train_names), ("val", val_names), ("test", test_names)]:
+        print(f"DATASET {name}!!!")
+        print()
+        datasets.append(ZarrDataset(
+            root=None,
+            dataset_parameters=config['dataset_parameters'],
+            temporal_dataset_parameters=config['temporal_dataset_parameters'],
+            selected_edge_features=config['selected_edge_features'],
+            selected_node_features=config['selected_node_features'],
+            scalers=config['scalers'],
+            device="cpu",
+            dataset_names=dataset_names,
+            dataset_path="./database/datasets/train/dyce",
+            mesh_common_file="./database/raw_datasets_dyce/dataset_dyce.pkl",
+            sequential_access=(name=="test"),
+        ))
+        print("DATASET DONE!!!")
+        print()
+    temporal_train_dataset, temporal_val_dataset, temporal_test_dataset = datasets
 
-    train_dataset, val_dataset, test_dataset, scalers = create_model_dataset(
-        scalers=scalers, device=device, **dataset_parameters,
-        **selected_node_features, **selected_edge_features
-    )
+    #train_dataset, val_dataset, test_dataset, scalers = create_model_dataset(
+        #scalers=scalers, device=device, **dataset_parameters,
+        #**selected_node_features, **selected_edge_features
+    #)
     
     temporal_dataset_parameters = config.temporal_dataset_parameters
-    temporal_train_dataset = to_temporal_dataset(train_dataset, **temporal_dataset_parameters)
+    #temporal_train_dataset = to_temporal_dataset(train_dataset, **temporal_dataset_parameters)
 
-    print('Number of training simulations:\t', len(train_dataset))
+    #print('Number of training simulations:\t', len(train_dataset))
     print('Number of training samples:\t', len(temporal_train_dataset))
     print('Number of node features:\t', temporal_train_dataset[0].x.shape[-1])
     print('Number of rollout steps:\t', temporal_train_dataset[0].y.shape[-1])
@@ -48,7 +80,7 @@ def main(config):
     num_nodes, num_edges = temporal_train_dataset[0].x.size(0), temporal_train_dataset[0].edge_attr.size(0)
 
     previous_t = temporal_dataset_parameters['previous_t']
-    test_size = len(test_dataset)
+    test_size = len(temporal_test_dataset)
     test_dataset_name = dataset_parameters['test_dataset_name']
     temporal_res = dataset_parameters['temporal_res']
     max_rollout_steps = temporal_dataset_parameters['rollout_steps']
@@ -59,7 +91,7 @@ def main(config):
     model_type = model_parameters.pop('model_type')
 
     if model_type == 'MSGNN':
-        num_scales = train_dataset[0].mesh.num_meshes
+        num_scales = temporal_train_dataset[0].intra_edge_ptr.shape[0]
         model_parameters['num_scales'] = num_scales
 
     model = get_model(model_type)(
@@ -76,12 +108,13 @@ def main(config):
     # info for testing dataset
     temporal_test_dataset_parameters = get_temporal_test_dataset_parameters(config, temporal_dataset_parameters)
 
-    temporal_val_dataset = to_temporal_dataset(val_dataset, rollout_steps=-1, **temporal_test_dataset_parameters)
+    #temporal_val_dataset = to_temporal_dataset(val_dataset, rollout_steps=-1, **temporal_test_dataset_parameters)
 
     plmodule = LightningTrainer(model, lr_info, trainer_options, temporal_test_dataset_parameters)
 
     pldatamodule = DataModule(temporal_train_dataset, temporal_val_dataset,
-                              batch_size=trainer_options['batch_size'])
+            batch_size=trainer_options['batch_size'],
+            train_dataloader_params={"num_workers":NUM_WORKERS},val_dataloader_params={"num_workers":NUM_WORKERS})
 
     # Number of parameters
     total_parameteres = sum(p.numel() for p in model.parameters())
@@ -110,7 +143,7 @@ def main(config):
                         max_epochs=trainer_options['max_epochs'],
                         gradient_clip_val=1, 
                         precision='16-mixed',
-                        enable_progress_bar=False,
+                        enable_progress_bar=True,
                         logger=wandb_logger,
                         callbacks=[checkpoint_callback, 
                                 curriculum_callback, 
@@ -132,19 +165,22 @@ def main(config):
     trainer.validate(plmodule, pldatamodule)
 
     # Numerical simulation times
-    maximum_time = test_dataset[0].WD.shape[1]
+    maximum_time = temporal_test_dataset[0].WD.shape[1]
     numerical_times = get_numerical_times(test_dataset_name+'_test', 
                     test_size, temporal_res, maximum_time, 
                     **temporal_test_dataset_parameters,
                     overview_file='database/overview.csv')
 
     # Rollout error and time
+    test_dataset = [temporal_test_dataset.get(ds_idx, whole_dataset=True, clip_length=801) for ds_idx in [0,1]]
     temporal_test_dataset = to_temporal_dataset(test_dataset, rollout_steps=-1, **temporal_test_dataset_parameters)
 
     test_dataloader = DataLoader(temporal_test_dataset, batch_size=len(temporal_test_dataset), shuffle=False)
 
     start_time = time.time()
     predicted_rollout = trainer.predict(plmodule, dataloaders=test_dataloader)
+    with open(f"predicted_rollout-{time.time()}.pkl","wb") as f:
+        pickle.dump(predicted_rollout, f)
     prediction_times = time.time() - start_time
     prediction_times = prediction_times/len(temporal_test_dataset)
     predicted_rollout = [item for roll in predicted_rollout for item in roll]
