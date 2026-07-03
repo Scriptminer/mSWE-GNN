@@ -3,6 +3,7 @@ import json
 import pickle
 import torch
 import wandb
+import datetime
 import time
 import matplotlib.pyplot as plt
 import lightning as L
@@ -23,7 +24,7 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision('high')
 
-NUM_WORKERS = torch.get_num_threads()
+NUM_WORKERS = 20 #torch.get_num_threads()
 
 def main(config):
     L.seed_everything(config.models['seed'])
@@ -41,11 +42,11 @@ def main(config):
     train_names = names_split["train"][:train_val_split]
     val_names = names_split["train"][train_val_split:]
     test_names = names_split["test"]
-    
+     
     datasets = []
     for name, dataset_names in [("train", train_names), ("val", val_names), ("test", test_names)]:
         print(f"DATASET {name}!!!")
-        print()
+        print(dataset_names)
         datasets.append(ZarrDataset(
             root=None,
             dataset_parameters=config['dataset_parameters'],
@@ -114,7 +115,7 @@ def main(config):
 
     pldatamodule = DataModule(temporal_train_dataset, temporal_val_dataset,
             batch_size=trainer_options['batch_size'],
-            train_dataloader_params={"num_workers":NUM_WORKERS},val_dataloader_params={"num_workers":NUM_WORKERS})
+            train_dataloader_params={"num_workers":NUM_WORKERS,"persistent_workers":True},val_dataloader_params={"num_workers":NUM_WORKERS,"persistent_workers":True})
 
     # Number of parameters
     total_parameteres = sum(p.numel() for p in model.parameters())
@@ -179,7 +180,7 @@ def main(config):
 
     start_time = time.time()
     predicted_rollout = trainer.predict(plmodule, dataloaders=test_dataloader)
-    with open(f"predicted_rollout-{time.time()}.pkl","wb") as f:
+    with open(f"predicted_rollout-{datetime.datetime.now().isoformat()}.pkl","wb") as f:
         pickle.dump(predicted_rollout, f)
     prediction_times = time.time() - start_time
     prediction_times = prediction_times/len(temporal_test_dataset)

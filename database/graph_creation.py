@@ -1756,8 +1756,8 @@ def export_zarr_dataset(dataset, path, zarr_variables=['WD', 'VX', 'VY', 'BC']):
     ds = { var: xr.DataArray(dataset[var]).rename({"dim_0":"nFaces", "dim_1":"time"}) for var in ["WD","VX","VY"] }
     ds.update({"BC": xr.DataArray(dataset["BC"]).rename({"dim_1":"time"})})
     zarr_dataset = xr.Dataset(ds)
-    depth_velocity_encoding = {"compressor":zarr.codecs.zstd.ZstdCodec(level=19), "scale_factor":0.001, "dtype":"int16", "filters":[zarr.codecs.Delta(dtype="int16")]}
-    BC_encoding = {"compressor":zarr.codecs.zstd.ZstdCodec(level=19),"dtype":"float32"}
+    depth_velocity_encoding = {"compressor":zarr.codecs.zstd.Zstd(level=19), "scale_factor":0.001, "dtype":"int16", "filters":[zarr.codecs.Delta(dtype="int16")]}
+    BC_encoding = {"compressor":zarr.codecs.zstd.Zstd(level=19),"dtype":"float32"}
 
     zarr_dataset = zarr_dataset.chunk({"time":64}) # Time chunks of 64 yields chunksizes of ~1MB. Aiming for the largest chunksize where reads (from a network drive) will still be seek-limited (the application favours small chunk sizes for random access)
 

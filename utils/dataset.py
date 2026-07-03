@@ -196,7 +196,7 @@ def get_edge_features(data, scalers=None, edge_length=False, edge_relative_dista
     
     return edge_features
 
-def process_WD_VX_VY(data, temporal_res=60, 
+def process_WD_VX_VY(data, temporal_res=60, original_temporal_res=60, 
                      scalers=None, device='cpu'):
     '''Processes dynamic features that will be used to create output node features
 
@@ -204,6 +204,8 @@ def process_WD_VX_VY(data, temporal_res=60,
         dataset sample, containing numerical simulation
     temporal_res: int [min]
         temporal resolution for the dataset (default=60)
+    original_temporal_res: int
+        temporal resolution of the input matrix
     scalers: None, dict
         define how to scale water depth and velocities
         (default=None)
@@ -219,17 +221,17 @@ def process_WD_VX_VY(data, temporal_res=60,
     temp = Data()
 
     WD = process_attr(data.WD, scaler=scalers['WD_scaler'], device=device)
-    temp.WD = get_temporal_res(WD, temporal_res=temporal_res)
+    temp.WD = get_temporal_res(WD, temporal_res=temporal_res, original_temporal_res=original_temporal_res)
 
     VX = process_attr(data.VX, scaler=scalers['V_scaler'], device=device)*WD
     VY = process_attr(data.VY, scaler=scalers['V_scaler'], device=device)*WD
 
     V = torch.sqrt(VX**2 + VY**2)
-    temp.V = get_temporal_res(V, temporal_res=temporal_res)
+    temp.V = get_temporal_res(V, temporal_res=temporal_res, original_temporal_res=original_temporal_res)
 
     return temp
 
-def create_data_attr(datasets, scalers=None, temporal_res=60,  
+def create_data_attr(datasets, scalers=None, temporal_res=60, original_temporal_res=60, 
                      device='cpu', **selected_features):
     '''
     Creates x, y, and edge_attr from Data object
@@ -240,6 +242,8 @@ def create_data_attr(datasets, scalers=None, temporal_res=60,
         sklearn.preprocessing._data scaler used for normalizing the data
     temporal_res: int [min]
         selects the desired time step for the temporal resolution
+    original_temporal_res: int
+        temporal resolution of the input matrix
     selected_features:
         selected_node_features: dict (of bool)
             dictionary that specifies node features
@@ -256,7 +260,7 @@ def create_data_attr(datasets, scalers=None, temporal_res=60,
         ['edge_length', 'edge_relative_distance', 'edge_slope']}
 
     for data in datasets:
-        temp = process_WD_VX_VY(data, temporal_res=temporal_res, scalers=scalers, device=device)
+        temp = process_WD_VX_VY(data, temporal_res=temporal_res, original_temporal_res=original_temporal_res, scalers=scalers, device=device)
         temp.edge_index = data.edge_index.to(device)
         temp.edge_attr = get_edge_features(data, scalers=scalers, **selected_edge_features, device=device)
         temp.x = get_node_features(data, **selected_node_features, scalers=scalers, device=device)
@@ -265,7 +269,7 @@ def create_data_attr(datasets, scalers=None, temporal_res=60,
         temp.area = data.area.to(device)
         if 'BC' in data.keys():
             if data.BC.dim() > 2:   #hydrograph BC
-                temp.BC = get_temporal_res(data.BC[:,:,1], temporal_res=temporal_res)
+                temp.BC = get_temporal_res(data.BC[:,:,1], temporal_res=temporal_res, original_temporal_res=original_temporal_res)
             else:                   #constant BC
                 time_steps = temp.WD.shape[1]
                 temp.BC = torch.ones(time_steps)*data.BC
