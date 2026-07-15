@@ -18,13 +18,11 @@ from utils.visualization import PlotRollout
 from utils.miscellaneous import get_numerical_times, get_speed_up, get_model, SpatialAnalysis, fix_dict_in_config
 from training.train import LightningTrainer, DataModule, CurriculumLearning, ZarrDataset
 
-import h5py
-
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision('high')
 
-NUM_WORKERS = 20 #torch.get_num_threads()
+NUM_WORKERS = torch.get_num_threads()
 
 def main(config):
     L.seed_everything(config.models['seed'])
@@ -125,7 +123,7 @@ def main(config):
     # Define callbacks
     checkpoint_callback = ModelCheckpoint(dirpath='lightning_logs/models',
                                         monitor="val_loss", mode='min',
-                                        save_top_k=1)
+                                        save_top_k=-1)
     curriculum_callback = CurriculumLearning(max_rollout_steps, patience=5)
     early_stopping      = EarlyStopping('val_CSI_005', mode='max', patience=trainer_options['patience'])
     wandb_logger.watch(model, log="all", log_graph=False)
@@ -137,6 +135,7 @@ def main(config):
                     'temporal_test_dataset_parameters': temporal_test_dataset_parameters}
     
     if 'saved_model' in config:
+        print(f"Loading saved model {config['saved_model']}")
         model = plmodule.load_from_checkpoint(config['saved_model'], map_location=device, **plmodule_kwargs)
 
     # Define trainer
@@ -145,6 +144,7 @@ def main(config):
                         gradient_clip_val=1, 
                         precision='16-mixed',
                         enable_progress_bar=True,
+                        detect_anomaly=True,
                         logger=wandb_logger,
                         callbacks=[checkpoint_callback, 
                                 curriculum_callback, 
@@ -153,15 +153,11 @@ def main(config):
     
     # Train and get trained model
     trainer.fit(plmodule, pldatamodule)
-    print("Saving model")
-    with h5py.File("model.h5", "w") as f:
-        for name, param in model.state_dict().items():
-            f.create_dataset(name, data=param.cpu().numpy())
 
     # Load the best model checkpoint
     plmodule = plmodule.load_from_checkpoint(checkpoint_callback.best_model_path, map_location=device, **plmodule_kwargs)
     model = plmodule.model.to(device)
-    
+    quit()
     # validate with trained model
     trainer.validate(plmodule, pldatamodule)
 

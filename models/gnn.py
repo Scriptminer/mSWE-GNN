@@ -10,6 +10,9 @@ from typing import Optional
 
 from utils.dataset import create_scale_mask
 
+import numpy as np
+import datetime
+
 class GNN(BaseFloodModel):
     '''
     GNN encoder-processor-decoder
@@ -265,7 +268,7 @@ class MSGNN(BaseFloodModel):
         return create_scale_mask(num_nodes, self.num_scales, data.node_ptr, data, device=self.device)
     
     def forward(self, graph):
-        """Multiscale encoder-processor-decoder"""    
+        """Multiscale encoder-processor-decoder"""
         x = graph.x.clone()
         edge_index = graph.edge_index
         edge_attr = graph.edge_attr
@@ -301,7 +304,8 @@ class MSGNN(BaseFloodModel):
         # fine to coarse but skipping the coarsest scale (which is processed in the next loop)
         for i in range(self.num_scales-1):
             # downgoing GNN pass
-            x_d = self.gnn_processor[i](x_s, x_d, edge_index[:,edge_ptr[i]:edge_ptr[i+1]], edge_attr[edge_ptr[i]:edge_ptr[i+1]])
+            print(f"++++ Fine to Coarse {i}") #x_d = self.gnn_processor[i](x_s, x_d, edge_index[:,edge_ptr[i]:edge_ptr[i+1]], edge_attr[edge_ptr[i]:edge_ptr[i+1]])
+            x_d = torch.utils.checkpoint.checkpoint(self.gnn_processor[i], x_s, x_d, edge_index[:,edge_ptr[i]:edge_ptr[i+1]], edge_attr[edge_ptr[i]:edge_ptr[i+1]], use_reentrant=False, debug=False, context_fn=pass_tracker_context_fn)
 
             # keep in memory the last operation before pooling (which would be overwritten otherwise)
             x_down = x_down + x_d * (mask==i)[:,None]
@@ -316,8 +320,9 @@ class MSGNN(BaseFloodModel):
         for i in range(self.num_scales):
             gnn_id = self.num_scales-1+i
             # upgoing GNN pass
-            x_d = self.gnn_processor[gnn_id](x_s, x_d, edge_index[:,edge_ptr[-i-2]:edge_ptr[-i-1]], edge_attr[edge_ptr[-i-2]:edge_ptr[-i-1]])
-                
+            print(f"++++ Coarse to Fine {gnn_id}") #x_d = self.gnn_processor[gnn_id](x_s, x_d, edge_index[:,edge_ptr[-i-2]:edge_ptr[-i-1]], edge_attr[edge_ptr[-i-2]:edge_ptr[-i-1]])
+            x_d = torch.utils.checkpoint.checkpoint(self.gnn_processor[gnn_id], x_s, x_d, edge_index[:,edge_ptr[-i-2]:edge_ptr[-i-1]], edge_attr[edge_ptr[-i-2]:edge_ptr[-i-1]], use_reentrant=False, debug=False, context_fn=pass_tracker_context_fn)
+
             # save GNN output before pooling
             x_up = x_up + x_d * (mask==self.num_scales-i-1)[:,None]
 
@@ -346,6 +351,7 @@ class MSGNN(BaseFloodModel):
         
         # Mask very small water depth
         x = self._mask_small_WD(x, epsilon=0.0001)
+        print(f"CUDA mem usage (MiB): ", torch.cuda.memory_allocated("cuda:0")/1024/1024)
 
         return x
 
@@ -405,11 +411,12 @@ class SWEGNN(nn.Module):
         
         for k in range(self.K):
             # Filter out zero values
-            mask = out.sum(1) != 0
+            #mask = out.sum(1) != 0
+            mask = out.sum(1) > torch.finfo(torch.float32).eps # Modify to count extremely small values as if they are 0, for stability
             mask_row = mask[row]
             mask_col = mask[col]
             edge_index_mask = mask_row + mask_col
-
+            print(f"[recompute={PassTrackerMode.status[0]}] edge_index_mask (shape={edge_index_mask.shape}) at {datetime.datetime.now()}, k={k}, sum={edge_index_mask.sum()}, out.shape={out.shape}, x_s[row].shape={x_s[row].shape}, row.shape={row.shape} ({row.min()}-{row.max()}), col.shape={col.shape} ({col.min()}-{col.max()}), mask.shape={mask.shape}, out.sum(1): 0count={(out.sum(1)==0).sum()}, abs<0.00001count={(out.sum(1).abs()<0.00001).sum()}, abs<eps32({torch.finfo(torch.float32).eps})count={(out.sum(1).abs()<torch.finfo(torch.float32).eps).sum()}") #, abs<0.00001hist={np.histogram(out.sum(1)[out.sum(1).abs()<0.00001].detach().cpu().numpy(), bins=100)}") 
             # Edge update
             e_ij = torch.cat([x_s[row][edge_index_mask], 
                                 x_s[col][edge_index_mask], 
@@ -449,3 +456,16 @@ class SWEGNN(nn.Module):
             self.__class__.__name__, self.edge_output_size, 
             self.edge_features, self.K, self.with_filter_matrix,
             self.with_gradient)
+
+class PassTrackerMode(torch.utils._python_dispatch.TorchDispatchMode):
+    status = [None]
+    def __init__(self, is_recompute):
+        super().__init__()
+        self.is_recompute = is_recompute
+    def __torch_dispatch__(self,func,types,args=(), kwargs=None):
+        PassTrackerMode.status[0] = self.is_recompute
+        #print("torch_dispatch:", func, types, args, kwargs, self.is_recompute)
+        return func(*args, **kwargs)#, is_recompute=self.is_recompute)
+
+def pass_tracker_context_fn():
+    return (PassTrackerMode(is_recompute=False), PassTrackerMode(is_recompute=True))

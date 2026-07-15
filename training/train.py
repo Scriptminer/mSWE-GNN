@@ -1,5 +1,6 @@
 # Libraries
 import copy
+import datetime
 import fsspec
 import os
 import numpy as np
@@ -12,6 +13,8 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.data.batch import Batch
 import torch_geometric.data
 import xarray as xr
+
+from torch.profiler import profile, ProfilerActivity, record_function
 
 from training.loss import loss_function
 from utils.miscellaneous import get_rollout_loss, get_CSI
@@ -133,13 +136,14 @@ class LightningTrainer(L.LightningModule):
         self.log("rollout_steps", torch.tensor(self.rollout_steps, dtype=torch.float32), on_step=False, on_epoch=True)
         temp = adapt_batch_training(batch)
         roll_loss = []
-
+        #torch.cuda.memory._record_memory_history(max_entries=100000)
         for i in range(self.rollout_steps):
             temp.x[:,-self.dynamic_vars:] = apply_boundary_condition(temp.x[:,-self.dynamic_vars:], 
                                                                 temp.BC[:,:,i], temp.node_BC, 
                                                                 type_BC=temp.type_BC)
             # Model prediction
             preds = self.model(temp)
+
             temp.x = use_prediction(temp.x, preds, self.model.previous_t)
 
             loss = loss_function(preds, temp.y[:,:,i], temp, temp.BC[:,-2:,i+1].mean(1), type_loss=self.type_loss, 
@@ -148,7 +152,12 @@ class LightningTrainer(L.LightningModule):
             roll_loss.append(loss)
 
         loss = torch.stack(roll_loss).mean()
-        self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+        #try:
+        #    torch.cuda.memory._dump_snapshot(f"cuda-mem-snapshot_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f')[:-3]}.pkl")
+        #except Exception as e:
+        #    print(f"Failed to capture memory snapshot {e}")
+        #torch.cuda.memory._record_memory_history(enabled=None)
         return loss
 
     def configure_optimizers(self):
@@ -217,6 +226,7 @@ class ZarrDataset(torch_geometric.data.Dataset):
             ds.WD.shape[1] - (self.previous_t-1) - self.rollout_steps
             for ds in self.dataset_zarrs
         ]
+        self.dataset_lengths = [min(50,l) for l in self.dataset_lengths]
         self.start_indices = np.cumsum([0] + self.dataset_lengths[:-1]) # Overall index of the first item of each simulation dataset, treating datasets as if concatenated in order
         
         with open(mesh_common_file, "rb") as f:
@@ -249,6 +259,7 @@ class ZarrDataset(torch_geometric.data.Dataset):
             n_timesteps = self.previous_t + self.rollout_steps
         zarr_data = self.dataset_zarrs[dataset_idx]  # Dataset zarr file containing zarr data for the desired item
         
+        print(f"Getting sample {internal_idx} in dataset {dataset_idx}")
         if self.sequential_access:
             zarr_data.load()
 
@@ -269,6 +280,7 @@ class ZarrDataset(torch_geometric.data.Dataset):
         return temporal_data
     
     def len(self):
+        #return min(40, sum(self.dataset_lengths))
         return sum(self.dataset_lengths)
 
     def get_whole_dataset(self, dataset_idx):
