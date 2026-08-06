@@ -401,11 +401,21 @@ class SWEGNN(nn.Module):
         edge_index: edge indices
         edge_attr: edge features
         '''
+        #print(f"[recompute={PassTrackerMode.status[0]}] {hash(x_s)} {hash(x_d)} {hash(edge_index)} {hash(edge_attr)}")
+        #print(f"[recompute={PassTrackerMode.status[0]}] Define row")
         row = edge_index[0]
+        #print(f"[recompute={PassTrackerMode.status[0]}] Define col")
         col = edge_index[1]
+        #print(f"[recompute={PassTrackerMode.status[0]}] Define num_nodes")
         num_nodes = x_d.size(0)
         if self.with_filter_matrix:
-            out = self.filter_matrix[0].forward(x_d.clone())
+            #print(f"[recompute={PassTrackerMode.status[0]}] Clone op")
+            #print(x_d)
+            #print(self.filter_matrix[0])
+            x_d_cloned = x_d.clone()
+            #print(f"[recompute={PassTrackerMode.status[0]}] Filter matrix forward op")
+            out = self.filter_matrix[0].forward(x_d_cloned) #x_d.clone())
+            #print(f"[recompute={PassTrackerMode.status[0]}] Moving on to for loop")
         else:
             out = x_d.clone()
         
@@ -415,20 +425,21 @@ class SWEGNN(nn.Module):
             mask_row = mask[row]
             mask_col = mask[col]
             edge_index_mask = mask_row + mask_col
-            print(f"[recompute={PassTrackerMode.status[0]}] self.edge_features={self.edge_features}, self.normalize={self.normalize}, self.with_gradient={self.with_gradient}, self.upwind_mode={self.upwind_mode}, self.with_filter_matrix={self.with_filter_matrix}, edge_index_mask (shape={edge_index_mask.shape}) at {datetime.datetime.now()}, k={k}, sum={edge_index_mask.sum()}, out.shape={out.shape}, x_s[row].shape={x_s[row].shape}, row.shape={row.shape} ({row.min()}-{row.max()}), col.shape={col.shape} ({col.min()}-{col.max()}), mask.shape={mask.shape}, out.sum(1): 0count={(out.sum(1)==0).sum()}, abs<0.00001count={(out.sum(1).abs()<0.00001).sum()}, abs<eps32({torch.finfo(torch.float32).eps})count={(out.sum(1).abs()<torch.finfo(torch.float32).eps).sum()}") #, abs<0.00001hist={np.histogram(out.sum(1)[out.sum(1).abs()<0.00001].detach().cpu().numpy(), bins=100)}") 
+            #print(f"[recompute={PassTrackerMode.status[0]}] self.edge_features={self.edge_features}, self.normalize={self.normalize}, self.with_gradient={self.with_gradient}, self.upwind_mode={self.upwind_mode}, self.with_filter_matrix={self.with_filter_matrix}, edge_index_mask (shape={edge_index_mask.shape}) at {datetime.datetime.now()}, k={k}, sum={edge_index_mask.sum()}, out.shape={out.shape}, x_s[row].shape={x_s[row].shape}, row.shape={row.shape} ({row.min()}-{row.max()}), col.shape={col.shape} ({col.min()}-{col.max()}), mask.shape={mask.shape}, out.sum(1): 0count={(out.sum(1)==0).sum()}, abs<0.00001count={(out.sum(1).abs()<0.00001).sum()}, abs<eps32({torch.finfo(torch.float32).eps})count={(out.sum(1).abs()<torch.finfo(torch.float32).eps).sum()}") #, abs<0.00001hist={np.histogram(out.sum(1)[out.sum(1).abs()<0.00001].detach().cpu().numpy(), bins=100)}") 
             # Edge update
             e_ij = torch.cat([x_s[row][edge_index_mask], 
                                 x_s[col][edge_index_mask], 
                                 x_d[row][edge_index_mask], 
                                 x_d[col][edge_index_mask]], 1)
-            print(f"[recompute={PassTrackerMode.status[0]}] Test edge_features>0") 
+            #print(f"[recompute={PassTrackerMode.status[0]}] Test edge_features>0") 
             if self.edge_features > 0:
                 e_ij = torch.cat([e_ij, edge_attr[edge_index_mask]], 1)
             
-            print(f"[recompute={PassTrackerMode.status[0]}] Enter self.edge_mlp: e_ij.shape={e_ij.shape}, edge_attr[edge_index_mask].shape={edge_attr[edge_index_mask].shape if self.edge_features > 0 else 'N/A'}, e_ij.hash_tensor()={e_ij.hash_tensor()}, edge_index_mash.hash_tensor()={edge_index_mask.hash_tensor()}")
-            print(self.edge_mlp)
+            #print(f"[recompute={PassTrackerMode.status[0]}] Enter self.edge_mlp: e_ij.shape={e_ij.shape}, edge_attr[edge_index_mask].shape={edge_attr[edge_index_mask].shape if self.edge_features > 0 else 'N/A'}, e_ij.hash_tensor()={e_ij.hash_tensor()}, edge_index_mash.hash_tensor()={edge_index_mask.hash_tensor()}")
+            #print(self.edge_mlp, e_ij)
             s_ij = self.edge_mlp(e_ij)
-            
+            #print(f"[recompute={PassTrackerMode.status[0]}] MLP done!")
+
             if self.normalize:
                 s_ij = s_ij/vector_norm(s_ij, dim=1, keepdim=True)
                 s_ij.masked_fill_(torch.isnan(s_ij), 0)
@@ -448,7 +459,7 @@ class SWEGNN(nn.Module):
                 scattered = self.filter_matrix[k+1].forward(scattered)
 
             out = out + scattered
-        
+        #print(f"[recompute={PassTrackerMode.status[0]}] Done")
         return out
 
     def __repr__(self):
@@ -475,26 +486,29 @@ def policy_fn(ctx, op, *args, **kwargs):
     else:
         return torch.utils.checkpoint.CheckpointPolicy.PREFER_RECOMPUTE
 
-def pass_tracker_context_fn():
+torch.utils.checkpoint.SAC_IGNORED_OPS.add(torch.ops.aten._to_copy.default) # The _to_copy function get inserted extra times by PyTorch into the backward pass. If it's not ignored, this will cause a function counter mismatch between the forward and backward checkpointing contexts.
+
+def pass_tracker_context_fn(*args, **kwargs):
+    return torch.utils.checkpoint.create_selective_checkpoint_contexts([torch.ops.aten.ne.Scalar], *args, **kwargs)
     import copy, inspect, types
     #fwd, bwd = torch.utils.checkpoint.create_selective_checkpoint_contexts(policy_fn)
-    fwd, bwd = torch.utils.checkpoint.create_selective_checkpoint_contexts([])
+    fwd, bwd = torch.utils.checkpoint.create_selective_checkpoint_contexts([torch.ops.aten.ne.Scalar])
     fwd_torch_dispatch = copy.copy(fwd.__torch_dispatch__)
     bwd_torch_dispatch = copy.copy(bwd.__torch_dispatch__)
     def fwd_wrapper(self, *args, **kwargs):
         print(f"Fwd: {args[0]}")
         PassTrackerMode.status[0] = False
-        if args[0] == torch.ops.aten._to_copy.default:
-            print("fwd.storage before", fwd.func_counter, fwd.storage[torch.utils.checkpoint._sac_storage_key(args[0],args[2:])])
+        #if args[0] == torch.ops.aten._to_copy.default:
+        #    print("fwd.storage before", fwd.func_counter, fwd.storage[torch.utils.checkpoint._sac_storage_key(args[0],args[2:])])
         out = fwd_torch_dispatch(*args, **kwargs)
-        if args[0] == torch.ops.aten._to_copy.default:
-            print("fwd.storage after", fwd.func_counter, fwd.storage[torch.utils.checkpoint._sac_storage_key(args[0],args[2:])])
+        #if args[0] == torch.ops.aten._to_copy.default:
+        #    print("fwd.storage after", fwd.func_counter, fwd.storage[torch.utils.checkpoint._sac_storage_key(args[0],args[2:])])
         return out
     def bwd_wrapper(self, *args, **kwargs):
         print(f"Recomp: {args[0]}")
         PassTrackerMode.status[0] = True 
-        if args[0] == torch.ops.aten._to_copy.default:
-            print("bwd.storage", bwd.func_counter, bwd.storage[torch.utils.checkpoint._sac_storage_key(args[0],args[2:])])
+        #if args[0] == torch.ops.aten._to_copy.default:
+        #    print("bwd.storage", bwd.func_counter, bwd.storage[torch.utils.checkpoint._sac_storage_key(args[0],args[2:])])
         return bwd_torch_dispatch(*args, **kwargs)
     fwd.__torch_dispatch__ = types.MethodType(fwd_wrapper, fwd)
     bwd.__torch_dispatch__ = types.MethodType(bwd_wrapper, bwd)
