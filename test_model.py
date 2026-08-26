@@ -106,7 +106,6 @@ def main(config):
 
     #temporal_val_dataset = to_temporal_dataset(val_dataset, rollout_steps=-1, **temporal_test_dataset_parameters)
 
-    plmodule = LightningTrainer(model, lr_info, trainer_options, temporal_test_dataset_parameters)
 
     pldatamodule = DataModule(temporal_train_dataset, temporal_val_dataset,
                               batch_size=trainer_options['batch_size'])
@@ -154,7 +153,13 @@ def main(config):
 
     # Load the best model checkpoint
     print("Loading model...\n")
-    plmodule = plmodule.load_from_checkpoint("dyce_small_epoch3.ckpt", map_location=device, **plmodule_kwargs)
+    
+    plmodule = LightningTrainer.load_from_checkpoint(
+            checkpoint_path="lightning_logs/models/epoch=15-step=320.ckpt",
+            map_location=device,
+            weights_only=False,
+            **plmodule_kwargs
+    )
     model = plmodule.model.to(device)
 
     # validate with trained model
@@ -234,6 +239,7 @@ def main(config):
     print('Training and testing finished!')
 
 if __name__ == '__main__':
+    wandb.init(mode="disabled")
     # Read configuration file with parameters
     cfg = read_config('config_lisfloodfp_cpu_dyce.yaml')
     #cfg = read_config('config_dyce.yaml')
@@ -242,9 +248,9 @@ if __name__ == '__main__':
         log_model=True,
         # mode='disabled',
         config=cfg)
-
+    wandb.config.update(cfg)
     fix_dict_in_config(wandb)
-
+    
     config = wandb.config
 
     main(config)

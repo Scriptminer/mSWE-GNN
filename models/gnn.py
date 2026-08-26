@@ -351,7 +351,7 @@ class MSGNN(BaseFloodModel):
         
         # Mask very small water depth
         x = self._mask_small_WD(x, epsilon=0.0001)
-        print(f"CUDA mem usage (MiB): ", torch.cuda.memory_allocated("cuda:0")/1024/1024)
+        print(f"CUDA mem usage (MiB): ", torch.cuda.memory_allocated("cuda:0")/1024/1024, flush=True)
 
         return x
 
@@ -401,6 +401,18 @@ class SWEGNN(nn.Module):
         edge_index: edge indices
         edge_attr: edge features
         '''
+        nn = lambda t: t.flatten()[~t.flatten().isnan()]
+        def stats(tensor, txt):
+            if tensor is None:
+                print(f"[recompute={PassTrackerMode.status[0]}] {txt}: None")
+            elif tensor.numel() == 0:
+                print(f"[recompute={PassTrackerMode.status[0]}] {txt}: Empty Tensor")
+            else:
+                print(f"[recompute={PassTrackerMode.status[0]}] {txt}: min absmin max: {nn(tensor).min().item()} ({nn(tensor).abs().min().item()}) {nn(tensor).max().item()} {f'{tensor.isnan().sum()} NaNs present' if tensor.isnan().sum() > 0 else ''}")
+        #stats(x_s,"x_s")
+        #stats(x_d,"x_d")
+        #stats(edge_index,"edge_index")
+        #stats(edge_attr,"edge_attr")
         #print(f"[recompute={PassTrackerMode.status[0]}] {hash(x_s)} {hash(x_d)} {hash(edge_index)} {hash(edge_attr)}")
         #print(f"[recompute={PassTrackerMode.status[0]}] Define row")
         row = edge_index[0]
@@ -418,6 +430,7 @@ class SWEGNN(nn.Module):
             #print(f"[recompute={PassTrackerMode.status[0]}] Moving on to for loop")
         else:
             out = x_d.clone()
+        stats(out,"out (pre for loop")
         
         for k in range(self.K):
             # Filter out zero values
@@ -434,30 +447,49 @@ class SWEGNN(nn.Module):
             #print(f"[recompute={PassTrackerMode.status[0]}] Test edge_features>0") 
             if self.edge_features > 0:
                 e_ij = torch.cat([e_ij, edge_attr[edge_index_mask]], 1)
-            
             #print(f"[recompute={PassTrackerMode.status[0]}] Enter self.edge_mlp: e_ij.shape={e_ij.shape}, edge_attr[edge_index_mask].shape={edge_attr[edge_index_mask].shape if self.edge_features > 0 else 'N/A'}, e_ij.hash_tensor()={e_ij.hash_tensor()}, edge_index_mash.hash_tensor()={edge_index_mask.hash_tensor()}")
-            #print(self.edge_mlp, e_ij)
+            stats(e_ij, f"e_ij (k={k})") 
+            for layer in self.edge_mlp:
+                stats(layer.weight, str(layer))
             s_ij = self.edge_mlp(e_ij)
+
             #print(f"[recompute={PassTrackerMode.status[0]}] MLP done!")
+            stats(s_ij, "s_ij (initial)")
 
             if self.normalize:
-                s_ij = s_ij/vector_norm(s_ij, dim=1, keepdim=True)
-                s_ij.masked_fill_(torch.isnan(s_ij), 0)
+                if (s_ij==-torch.inf).sum() > 0 or (s_ij==-torch.inf).sum() > 0:
+                    print("Screening out +-inf's in s_ij!")
+                s_ij.masked_fill_(s_ij==-torch.inf, 0) # Preemptively mask values that will cause NaNs. TODO: remove, this was for testing only.
+                s_ij.masked_fill_(s_ij==torch.inf, 0) # Preemptively mask values that will cause NaNs. TODO: remove, this was for testing only.
+                s_ij.masked_fill_(s_ij.isnan(), 0) # TODO: remove, this was for testing only
+                #stats(s_ij, "s_ij (cleaned)")
+                vn = vector_norm(s_ij, dim=1, keepdim=True) # TODO: fix. Was part of next line, moved for testing
+                #stats(vn, "vn")
+                s_ij = s_ij/vn
+                #s_ij.masked_fill_(torch.isnan(s_ij), 0)
 
+            #stats(s_ij, "s_ij (normalised)")
+            #stats(out, "out")
             # Node update
             if self.with_gradient:
                 hydraulic_gradient = out[col][edge_index_mask]-out[row][edge_index_mask]
+                #stats(hydraulic_gradient, "hydraulic_gradient")
                 if self.upwind_mode:
                     hydraulic_gradient[hydraulic_gradient<0] = 0
                 shift_sum = hydraulic_gradient*s_ij
             else:
                 shift_sum = s_ij*out[row][edge_index_mask]
+            #stats(shift_sum, "shift_sum")
             scattered = scatter(shift_sum, col[edge_index_mask], reduce='sum', 
                           dim=0, dim_size=num_nodes)
+            #stats(scattered, "scattered (initial)")
 
             if self.with_filter_matrix:
+                #print(f"scattered min absmin max: {scattered.min().item()} ({scattered.abs().min().item()}) {scattered.max().item()}\n Filter Matrix: {self.filter_matrix[k+1]}")
+                #stats(self.filter_matrix[k+1].weight, "filter_matrix weights")
                 scattered = self.filter_matrix[k+1].forward(scattered)
-
+            
+            #stats(scattered, "scattered (final)")
             out = out + scattered
         #print(f"[recompute={PassTrackerMode.status[0]}] Done")
         return out
@@ -489,14 +521,14 @@ def policy_fn(ctx, op, *args, **kwargs):
 torch.utils.checkpoint.SAC_IGNORED_OPS.add(torch.ops.aten._to_copy.default) # The _to_copy function get inserted extra times by PyTorch into the backward pass. If it's not ignored, this will cause a function counter mismatch between the forward and backward checkpointing contexts.
 
 def pass_tracker_context_fn(*args, **kwargs):
-    return torch.utils.checkpoint.create_selective_checkpoint_contexts([torch.ops.aten.ne.Scalar], *args, **kwargs)
+    #return torch.utils.checkpoint.create_selective_checkpoint_contexts([torch.ops.aten.ne.Scalar], *args, **kwargs)
     import copy, inspect, types
     #fwd, bwd = torch.utils.checkpoint.create_selective_checkpoint_contexts(policy_fn)
     fwd, bwd = torch.utils.checkpoint.create_selective_checkpoint_contexts([torch.ops.aten.ne.Scalar])
     fwd_torch_dispatch = copy.copy(fwd.__torch_dispatch__)
     bwd_torch_dispatch = copy.copy(bwd.__torch_dispatch__)
     def fwd_wrapper(self, *args, **kwargs):
-        print(f"Fwd: {args[0]}")
+        #print(f"Fwd: {args[0]}")
         PassTrackerMode.status[0] = False
         #if args[0] == torch.ops.aten._to_copy.default:
         #    print("fwd.storage before", fwd.func_counter, fwd.storage[torch.utils.checkpoint._sac_storage_key(args[0],args[2:])])
@@ -505,7 +537,7 @@ def pass_tracker_context_fn(*args, **kwargs):
         #    print("fwd.storage after", fwd.func_counter, fwd.storage[torch.utils.checkpoint._sac_storage_key(args[0],args[2:])])
         return out
     def bwd_wrapper(self, *args, **kwargs):
-        print(f"Recomp: {args[0]}")
+        #print(f"Recomp: {args[0]}")
         PassTrackerMode.status[0] = True 
         #if args[0] == torch.ops.aten._to_copy.default:
         #    print("bwd.storage", bwd.func_counter, bwd.storage[torch.utils.checkpoint._sac_storage_key(args[0],args[2:])])
@@ -513,5 +545,3 @@ def pass_tracker_context_fn(*args, **kwargs):
     fwd.__torch_dispatch__ = types.MethodType(fwd_wrapper, fwd)
     bwd.__torch_dispatch__ = types.MethodType(bwd_wrapper, bwd)
     return (fwd, bwd)
-    #return torch.utils.checkpoint.create_selective_checkpoint_contexts(policy_fn)
-    #return (PassTrackerMode(is_recompute=False), PassTrackerMode(is_recompute=True))

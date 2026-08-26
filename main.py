@@ -18,6 +18,8 @@ from utils.visualization import PlotRollout
 from utils.miscellaneous import get_numerical_times, get_speed_up, get_model, SpatialAnalysis, fix_dict_in_config
 from training.train import LightningTrainer, DataModule, CurriculumLearning, ZarrDataset
 
+from NaNCapture import NaNCapture
+
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision('high')
@@ -136,28 +138,32 @@ def main(config):
     
     if 'saved_model' in config:
         print(f"Loading saved model {config['saved_model']}")
-        model = plmodule.load_from_checkpoint(config['saved_model'], map_location=device, **plmodule_kwargs)
+        #model = plmodule.load_from_checkpoint(config['saved_model'], map_location=device, **plmodule_kwargs)
+    ckpt_path = config.get("saved_model",None)
 
     # Define trainer
     trainer = L.Trainer(accelerator="auto", devices='auto',
                         max_epochs=trainer_options['max_epochs'],
-                        gradient_clip_val=1, 
+                        gradient_clip_val=1, # Bentivoglio et al., 2026 has "2", 2025 has "1"
                         precision='16-mixed',
                         enable_progress_bar=True,
-                        detect_anomaly=True,
+                        detect_anomaly=False, # Was True
                         logger=wandb_logger,
                         callbacks=[checkpoint_callback, 
                                 curriculum_callback, 
-                                early_stopping, 
+                                early_stopping,
+                                #NaNCapture("lightning_logs/models")
                                 ])
     
     # Train and get trained model
-    trainer.fit(plmodule, pldatamodule)
-
+    trainer.fit(plmodule, pldatamodule, ckpt_path=ckpt_path, weights_only=False)
+    print("Model fit done.")
+    wandb_logger.experiment.unwatch(model)
+    quit()
     # Load the best model checkpoint
     plmodule = plmodule.load_from_checkpoint(checkpoint_callback.best_model_path, map_location=device, **plmodule_kwargs)
     model = plmodule.model.to(device)
-    quit()
+    
     # validate with trained model
     trainer.validate(plmodule, pldatamodule)
 
@@ -222,17 +228,21 @@ def main(config):
     print('Training and testing finished!')
 
 if __name__ == '__main__':
+    wandb.init(mode="offline")
     # Read configuration file with parameters
     cfg = read_config('config_lisfloodfp_cpu_dyce.yaml')
     #cfg = read_config('config_dyce.yaml')
-
+    #wandb.init()
     wandb_logger = WandbLogger(
         log_model=True,
-        # mode='disabled',
-        config=cfg)
-
+        #mode='disabled',
+        config=cfg
+        )
+    wandb.config.update(cfg)
+    print(cfg)
+    print(wandb.config)
     fix_dict_in_config(wandb)
-
+    print(wandb.config)
     config = wandb.config
-
+    
     main(config)
