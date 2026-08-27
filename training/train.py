@@ -5,6 +5,7 @@ import fsspec
 import os
 import numpy as np
 import pickle
+import scipy.spatial
 import torch
 import torch.optim as optim
 import lightning as L
@@ -201,7 +202,7 @@ class LightningTrainer(L.LightningModule):
                 for i in range(batch.num_graphs)]
 
 class ZarrDataset(torch_geometric.data.Dataset):
-    def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, dataset_parameters=None, temporal_dataset_parameters=None, selected_node_features=None, selected_edge_features=None, scalers=None, device="cpu", dataset_path="", dataset_names=[], mesh_common_file="", sequential_access=False):
+    def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, dataset_parameters=None, temporal_dataset_parameters=None, selected_node_features=None, selected_edge_features=None, scalers=None, device="cpu", dataset_path="", dataset_names=[], mesh_common_file="", sequential_access=False, reproject_zarrs=True):
         print("Warning: not yet implemented all parameters from dataset.py, create_model_dataset()")
         if device == "cpu":
             print("Warning: using device CPU for dataset")
@@ -218,19 +219,56 @@ class ZarrDataset(torch_geometric.data.Dataset):
         self.selected_edge_features = selected_edge_features
         self.scalers = scalers
 
+        with open(mesh_common_file, "rb") as f:
+            self.mesh_common = pickle.load(f)
+        face_coords = xr.DataArray(self.mesh_common.mesh.face_xy, dims=("nFaces","coord"), coords={"nFaces":np.arange(len(self.mesh_common.mesh.face_xy))}) 
+
         self.device = device
         self.sequential_access = sequential_access
-        self.dataset_zarrs = [xr.open_dataset(os.path.join(dataset_path, f"{dataset_name}.zarr")) for dataset_name in dataset_names] # Lazy-load all zarr datasets
-        #self.dataset_zarrs = [self.load_zarr(os.path.join(dataset_path, f"{dataset_name}.zarr")) for dataset_name in dataset_names] # Load all compressed zarr datasets into memory. Omitted as it doesn't seem to be any faster.
+
+        if reproject_zarrs:
+            self.dataset_zarrs = []
+            indices = {}
+            for dataset_name in dataset_names:
+                parameters = {
+                    param: xr.open_dataset(
+                        os.path.join(dataset_path, f"{dataset_name}.zarr"),
+                        group=param,
+                        engine="zarr",
+                        chunks={} # Use the chunking defined in the zarr file
+                    )[param] for param in ["wd","Vx","Vy","BC"]
+                } # Lazy-load all zarr datasets
+
+                ### ISEL METHOD
+                if indices == {}:
+                    # Only compute indices on first iteration
+                    for param in ["wd","Vx","Vy"]:
+                        # The code in this for loop was adapted from Google Gemini
+                        X, Y = np.meshgrid(parameters[param]["x"], parameters[param]["y"])
+                        grid_coords = np.column_stack((X.ravel(),Y.ravel()))
+                        tree = scipy.spatial.cKDTree(grid_coords)
+                        _, flat_indices = tree.query(face_coords)
+                        y_indices, x_indices = np.unravel_index(flat_indices, X.shape)
+                        indices[param] = xr.DataArray(np.vstack([x_indices,y_indices])).compute()
+                
+                reprojected = {param: parameters[param].isel(x=indices[param][0], y=indices[param][1]).rename({"dim_1":"nFaces"}).transpose("nFaces","time") for param in ["wd","Vx","Vy"]}
+                ### SEL METHOD
+                # reprojected = {param: parameters[param].sel(x=face_coords[:,0], y=face_coords[:,1], method="nearest").transpose("nFaces","time") for param in ["wd","Vx","Vy"]} # Lazily reproject coordinates onto mesh
+                ### END SEL METHOD
+                for param in reprojected:
+                    reprojected[param]["x"] = face_coords[:,0]
+                    reprojected[param]["y"] = face_coords[:,1]
+                self.dataset_zarrs.append(xr.Dataset({"WD":reprojected["wd"], "VX":reprojected["Vx"], "VY":reprojected["Vy"], "BC": parameters["BC"]}).reset_index("nFaces").reset_coords(drop=True))
+        else:
+            self.dataset_zarrs = [xr.open_dataset(os.path.join(dataset_path, f"{dataset_name}.zarr")) for dataset_name in dataset_names] # Lazy-load all zarr datasets
+            #self.dataset_zarrs = [self.load_zarr(os.path.join(dataset_path, f"{dataset_name}.zarr")) for dataset_name in dataset_names] # Load all compressed zarr datasets into memory. Omitted as it doesn't seem to be any faster. 
+
         self.dataset_lengths = [
             ds.WD.shape[1] - (self.previous_t-1) - self.rollout_steps
             for ds in self.dataset_zarrs
         ]
         self.dataset_lengths = [min(50,l) for l in self.dataset_lengths]
         self.start_indices = np.cumsum([0] + self.dataset_lengths[:-1]) # Overall index of the first item of each simulation dataset, treating datasets as if concatenated in order
-        
-        with open(mesh_common_file, "rb") as f:
-            self.mesh_common = pickle.load(f)
         
         self._scalers = None
 
@@ -268,13 +306,15 @@ class ZarrDataset(torch_geometric.data.Dataset):
                 temporal_slice = np.s_[:, :clip_length] # If clip_length is None, take all timesteps
             else:
                 temporal_slice = np.s_[:, internal_idx : internal_idx+n_timesteps] # Extract only the required part of the Zarr file
-            data[data_var] = torch.FloatTensor(zarr_data[data_var][temporal_slice].data) # Extract only the required part of the Zarr file
+            print(f"Getting slice {temporal_slice} for variable {data_var} (whole_dataset={whole_dataset})")
+            data[data_var] = torch.FloatTensor(zarr_data[data_var][temporal_slice].values) # Extract only the required part of the Zarr file
         
         # Create x, edge_attr, y
         dataset = create_data_attr([data], scalers=scalers, device=self.device, **self.dataset_parameters, **self.selected_node_features, **self.selected_edge_features)[0]
         if whole_dataset:
             return dataset
         # Convert to single temporal data object
+        print(f"Creating temporal data object.")
         temporal_data = to_temporal(dataset, self.previous_t, self.time_start, self.time_stop, self.rollout_steps)[0]
         temporal_data.time += internal_idx # Time correction
         return temporal_data
@@ -292,7 +332,7 @@ class ZarrDataset(torch_geometric.data.Dataset):
         zarr_data = self.dataset_zarrs[dataset_idx]
 
         for data_var in zarr_data.data_vars:
-            data[data_var] = torch.FloatTensor(zarr_data[data_var].data)
+            data[data_var] = torch.FloatTensor(zarr_data[data_var].values)
 
         dataset = create_data_attr([data], scalers=scalers, device=self.device, **self.dataset_parameters, **self.selected_node_features, **self.selected_edge_features)[0]
         return dataset
