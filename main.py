@@ -57,7 +57,7 @@ def main(config):
             device="cpu",
             dataset_names=dataset_names,
             dataset_path="./database/datasets/train/dyce",
-            mesh_common_file="./database/raw_datasets_dyce/dataset_dyce.pkl",
+            mesh_common_file=config["dataset_parameters"]["mesh"], #"./database/raw_datasets_dyce/dataset_dyce.pkl",
             sequential_access=(name=="test"),
         ))
         print("DATASET DONE!!!")

@@ -390,6 +390,7 @@ class SWEGNN(nn.Module):
             ])
 
 
+
     def forward(self, 
                 x_s: Tensor, 
                 x_d: Tensor, 
@@ -402,17 +403,23 @@ class SWEGNN(nn.Module):
         edge_attr: edge features
         '''
         nn = lambda t: t.flatten()[~t.flatten().isnan()]
+        display = False
+        printbuffer = []
         def stats(tensor, txt):
-            if tensor is None:
-                print(f"[recompute={PassTrackerMode.status[0]}] {txt}: None")
+            if tensor is None or tensor.numel() == 0 or nn(tensor).numel() == 0:
+                display = True
+                printbuffer.append(f"[recompute={PassTrackerMode.status[0]}] {txt}: None")
             elif tensor.numel() == 0:
-                print(f"[recompute={PassTrackerMode.status[0]}] {txt}: Empty Tensor")
+                display = True
+                printbuffer.append(f"[recompute={PassTrackerMode.status[0]}] {txt}: Empty Tensor")
             else:
-                print(f"[recompute={PassTrackerMode.status[0]}] {txt}: min absmin max: {nn(tensor).min().item()} ({nn(tensor).abs().min().item()}) {nn(tensor).max().item()} {f'{tensor.isnan().sum()} NaNs present' if tensor.isnan().sum() > 0 else ''}")
-        #stats(x_s,"x_s")
-        #stats(x_d,"x_d")
-        #stats(edge_index,"edge_index")
-        #stats(edge_attr,"edge_attr")
+                if tensor.isnan().any():
+                    display = True
+                printbuffer.append(f"[recompute={PassTrackerMode.status[0]}] {txt}: min absmin max: {nn(tensor).min().item()} ({nn(tensor).abs().min().item()}) {nn(tensor).max().item()} {f'{tensor.isnan().sum()} NaNs present' if tensor.isnan().sum() > 0 else ''}")
+        stats(x_s,"x_s")
+        stats(x_d,"x_d")
+        stats(edge_index,"edge_index")
+        stats(edge_attr,"edge_attr")
         #print(f"[recompute={PassTrackerMode.status[0]}] {hash(x_s)} {hash(x_d)} {hash(edge_index)} {hash(edge_attr)}")
         #print(f"[recompute={PassTrackerMode.status[0]}] Define row")
         row = edge_index[0]
@@ -452,7 +459,6 @@ class SWEGNN(nn.Module):
             for layer in self.edge_mlp:
                 stats(layer.weight, str(layer))
             s_ij = self.edge_mlp(e_ij)
-
             #print(f"[recompute={PassTrackerMode.status[0]}] MLP done!")
             stats(s_ij, "s_ij (initial)")
 
@@ -462,36 +468,38 @@ class SWEGNN(nn.Module):
                 s_ij.masked_fill_(s_ij==-torch.inf, 0) # Preemptively mask values that will cause NaNs. TODO: remove, this was for testing only.
                 s_ij.masked_fill_(s_ij==torch.inf, 0) # Preemptively mask values that will cause NaNs. TODO: remove, this was for testing only.
                 s_ij.masked_fill_(s_ij.isnan(), 0) # TODO: remove, this was for testing only
-                #stats(s_ij, "s_ij (cleaned)")
+                stats(s_ij, "s_ij (cleaned)")
                 vn = vector_norm(s_ij, dim=1, keepdim=True) # TODO: fix. Was part of next line, moved for testing
-                #stats(vn, "vn")
+                stats(vn, "vn")
                 s_ij = s_ij/vn
                 #s_ij.masked_fill_(torch.isnan(s_ij), 0)
 
-            #stats(s_ij, "s_ij (normalised)")
-            #stats(out, "out")
+            stats(s_ij, "s_ij (normalised)")
+            stats(out, "out")
             # Node update
             if self.with_gradient:
                 hydraulic_gradient = out[col][edge_index_mask]-out[row][edge_index_mask]
-                #stats(hydraulic_gradient, "hydraulic_gradient")
+                stats(hydraulic_gradient, "hydraulic_gradient")
                 if self.upwind_mode:
                     hydraulic_gradient[hydraulic_gradient<0] = 0
                 shift_sum = hydraulic_gradient*s_ij
             else:
                 shift_sum = s_ij*out[row][edge_index_mask]
-            #stats(shift_sum, "shift_sum")
+            stats(shift_sum, "shift_sum")
             scattered = scatter(shift_sum, col[edge_index_mask], reduce='sum', 
                           dim=0, dim_size=num_nodes)
-            #stats(scattered, "scattered (initial)")
+            stats(scattered, "scattered (initial)")
 
             if self.with_filter_matrix:
                 #print(f"scattered min absmin max: {scattered.min().item()} ({scattered.abs().min().item()}) {scattered.max().item()}\n Filter Matrix: {self.filter_matrix[k+1]}")
-                #stats(self.filter_matrix[k+1].weight, "filter_matrix weights")
+                stats(self.filter_matrix[k+1].weight, "filter_matrix weights")
                 scattered = self.filter_matrix[k+1].forward(scattered)
             
-            #stats(scattered, "scattered (final)")
+            stats(scattered, "scattered (final)")
             out = out + scattered
         #print(f"[recompute={PassTrackerMode.status[0]}] Done")
+        if display:
+            print("\n".join(printbuffer))
         return out
 
     def __repr__(self):

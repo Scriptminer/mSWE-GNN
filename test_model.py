@@ -52,7 +52,7 @@ def main(config):
             device="cpu",
             dataset_names=dataset_names,
             dataset_path="./database/datasets/train/dyce",
-            mesh_common_file="./database/raw_datasets_dyce/dataset_dyce.pkl",
+            mesh_common_file=config["dataset_parameters"]["mesh"], #"./database/raw_datasets_dyce/dataset_dyce.pkl",
             sequential_access=(name=="test")
         ))
         print("DATASET DONE!!!")
@@ -155,7 +155,7 @@ def main(config):
     print("Loading model...\n")
     
     plmodule = LightningTrainer.load_from_checkpoint(
-            checkpoint_path="lightning_logs/models/epoch=15-step=320.ckpt",
+            checkpoint_path="lightning_logs/models/epoch=99-step=3000.ckpt",
             map_location=device,
             weights_only=False,
             **plmodule_kwargs

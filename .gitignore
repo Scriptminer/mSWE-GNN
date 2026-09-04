@@ -5,6 +5,7 @@
 *.pol
 *.nc
 *.mp4
+slurm-*.out
 __pycache__
 *.pyc
 lightning_logs
