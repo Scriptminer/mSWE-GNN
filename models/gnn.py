@@ -304,7 +304,7 @@ class MSGNN(BaseFloodModel):
         # fine to coarse but skipping the coarsest scale (which is processed in the next loop)
         for i in range(self.num_scales-1):
             # downgoing GNN pass
-            print(f"++++ Fine to Coarse {i}") #x_d = self.gnn_processor[i](x_s, x_d, edge_index[:,edge_ptr[i]:edge_ptr[i+1]], edge_attr[edge_ptr[i]:edge_ptr[i+1]])
+            #print(f"++++ Fine to Coarse {i}") #x_d = self.gnn_processor[i](x_s, x_d, edge_index[:,edge_ptr[i]:edge_ptr[i+1]], edge_attr[edge_ptr[i]:edge_ptr[i+1]])
             x_d = torch.utils.checkpoint.checkpoint(self.gnn_processor[i], x_s, x_d, edge_index[:,edge_ptr[i]:edge_ptr[i+1]], edge_attr[edge_ptr[i]:edge_ptr[i+1]], use_reentrant=False, debug=False, context_fn=pass_tracker_context_fn)
 
             # keep in memory the last operation before pooling (which would be overwritten otherwise)
@@ -320,7 +320,7 @@ class MSGNN(BaseFloodModel):
         for i in range(self.num_scales):
             gnn_id = self.num_scales-1+i
             # upgoing GNN pass
-            print(f"++++ Coarse to Fine {gnn_id}") #x_d = self.gnn_processor[gnn_id](x_s, x_d, edge_index[:,edge_ptr[-i-2]:edge_ptr[-i-1]], edge_attr[edge_ptr[-i-2]:edge_ptr[-i-1]])
+            #print(f"++++ Coarse to Fine {gnn_id}") #x_d = self.gnn_processor[gnn_id](x_s, x_d, edge_index[:,edge_ptr[-i-2]:edge_ptr[-i-1]], edge_attr[edge_ptr[-i-2]:edge_ptr[-i-1]])
             x_d = torch.utils.checkpoint.checkpoint(self.gnn_processor[gnn_id], x_s, x_d, edge_index[:,edge_ptr[-i-2]:edge_ptr[-i-1]], edge_attr[edge_ptr[-i-2]:edge_ptr[-i-1]], use_reentrant=False, debug=False, context_fn=pass_tracker_context_fn)
 
             # save GNN output before pooling
@@ -406,6 +406,8 @@ class SWEGNN(nn.Module):
         display = False
         printbuffer = []
         def stats(tensor, txt):
+            return
+            nonlocal display
             if tensor is None or tensor.numel() == 0 or nn(tensor).numel() == 0:
                 display = True
                 printbuffer.append(f"[recompute={PassTrackerMode.status[0]}] {txt}: None")
