@@ -276,7 +276,7 @@ def create_data_attr(datasets, scalers=None, temporal_res=60, original_temporal_
             temp.node_BC = data.node_BC.to(device)
             temp.type_BC = data.type_BC
             temp.edge_BC_length = data.edge_BC_length.to(device)
-            temp.BC = temp.BC.to(device)/temp.edge_BC_length
+            temp.BC = temp.BC.to(device)/torch.unsqueeze(temp.edge_BC_length, 0).T # Each BC has its own length associated with it, unsqueeze and transpose to scale BC values by the correct edge length
         
         if 'mesh' in data.keys():
             temp.mesh = data.mesh
