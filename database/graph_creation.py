@@ -431,9 +431,8 @@ def connect_coarse_to_fine_mesh(coarse_mesh, fine_mesh):
     fine_face_xy = fine_mesh.face_xy
 
     coarse_polygons = [Path(coarse_mesh.node_xy[face_nodes[~np.isnan(face_nodes)].astype(int)]) for face_nodes in coarse_face_nodes]
-    contained_faces = [polygon.contains_points(fine_face_xy) for polygon in coarse_polygons]
-
-    coarse_to_fine_dual_edge_index = np.column_stack(np.where(contained_faces))
+    contained_faces = [polygon.contains_points(fine_face_xy) for polygon in coarse_polygons] # Check which fine faces are contained in coarse faces
+    coarse_to_fine_dual_edge_index = np.column_stack(np.where(contained_faces)) # Stack contained faces to create dual_edge_index
     # fine_to_coarse_dual_edge_index = coarse_to_fine_dual_edge_index[:, ::-1]
 
     return coarse_to_fine_dual_edge_index
@@ -902,7 +901,7 @@ class MultiscaleMesh(Mesh):
         self.get_intra_edges(meshes)
 
         # adding derived attributes and ghost cells
-        self._get_derived_attributes()    
+        self._get_derived_attributes()
         self.added_ghost_cells = True
         self.ghost_cells_ids = np.concatenate([mesh.ghost_cells_ids + self.face_ptr[i] for i, mesh in enumerate(meshes)])
         self.ghost_node_ids = [self.node_x.shape[0]-j-1 for j in range((self.nodes_per_face[self.face_BC]-2).sum())][::-1]
@@ -1272,7 +1271,6 @@ def get_BC_edge_index(dual_edge_index, face_BC, undirected_BC=False):
 def get_ghost_nodes(mesh):
     """Returns the ghost nodes ids"""
     num_BC_faces = len(mesh.face_BC)
-    print(f"mesh.face_BC: {mesh.face_BC}, len(mesh.face_BC): {len(mesh.face_BC)}")
     ghost_edge_index = []
     ghost_face_nodes = []
 
@@ -1287,10 +1285,7 @@ def get_ghost_nodes(mesh):
         # loop for polygons with more than 3 nodes
         for j in range(ghost_nodes[i]-1):
             ghost_edge_index.append([mesh.ghost_node_ids[i+j], mesh.ghost_node_ids[i+j+1]])
-        print(f"i: {i}, mesh.edge_index_BC: {mesh.edge_index_BC}, mesh.ghost_node_ids: {mesh.ghost_node_ids}, ghost_nodes: {ghost_nodes}")
-        print(f"mesh.edge_index_BC[i,1]: {mesh.edge_index_BC[i,1]}")
-        print(f"i+ghost_nodes[:i+1].sum()-1: {i+ghost_nodes[:i+1].sum()-1}")
-        print(f"mesh.ghost_node_ids[i+ghost_nodes[:i+1].sum()-1]: {mesh.ghost_node_ids[ghost_nodes[:i+1].sum()-1]}")
+
         ghost_edge_index.append([mesh.edge_index_BC[i,1], mesh.ghost_node_ids[ghost_nodes[:i+1].sum()-1]]) # Connect the end of the current boundary edge to the last ghost node associated with this edge (?)
         ghost_face_nodes.append([mesh.ghost_node_ids[i]] + mesh.edge_index_BC[i].tolist()) # TODO: this line's logic definitely doesn't work with >3 nodes
 
@@ -1332,20 +1327,41 @@ def find_BC_other_nodes(mesh):
     return np.concatenate(the_other_node)
 
 def find_face_BC(mesh):
-    """Find the faces that have boundary conditions (face_BC), knowing the edges with boundary conditions (edge_index_BC)"""
+    """Find the faces that have boundary conditions (face_BC), knowing the edges with boundary conditions (edge_index_BC)
+    
+    If multiple faces share one boundary condition edge, only the index of the first face will be returned."""
     face_BC = []
 
-    for i, face_nodes in enumerate(get_face_nodes_mesh(mesh)):
-        face_nodes = face_nodes[~np.isnan(face_nodes)]
-        
-        # Add first element to simplify circular iterations
-        face_nodes = np.concatenate((face_nodes, face_nodes[:1])).astype(int)
+    all_face_nodes = get_face_nodes_mesh(mesh)
 
-        # Find which face/s contains the boundary condition edge/s
-        if np.array([np.any((mesh.edge_index_BC == face_nodes[j:j+2]).sum(1)==2) or
-                     np.any((mesh.edge_index_BC[:,::-1] == face_nodes[j:j+2]).sum(1)==2)
-                     for j in range(len(face_nodes)-1)]).sum(0) == 1:
-            face_BC.append(i)
+    # Find indices of all faces containing at least two boundary nodes to reduce the number of faces to check
+    face_nodes_indices = np.where(np.isin(all_face_nodes, mesh.edge_index_BC.flatten()).sum(1)>0)[0]
+    filtered_face_nodes = all_face_nodes[face_nodes_indices]
+
+    # For each face, set the last face node equal to first face node to simplify circular iterations
+    filtered_face_nodes = np.hstack([filtered_face_nodes, filtered_face_nodes[:,:1]]).astype(int)
+
+    # Iterate through each boundary edge
+    for i, edge_index_BC in enumerate(mesh.edge_index_BC):
+        # Find face(s) containing the boundary condition edge
+        face_BC_indices = []
+
+        # Iterate through each edge (indices j:j+2), across all (filtered) faces
+        for j in range(filtered_face_nodes.shape[1]-1):
+            comp = np.all(filtered_face_nodes[:,j:j+2] == edge_index_BC, axis=1) | np.all(filtered_face_nodes[:,j:j+2] == edge_index_BC[::-1], axis=1)
+            # Find indices in filtered_face_nodes of all faces containing edge_index_BC at edge position j:j+2
+            filtered_face_BC_indicies = np.where(
+                np.all(filtered_face_nodes[:,j:j+2] == edge_index_BC, axis=1) |
+                np.all(filtered_face_nodes[:,j:j+2] == edge_index_BC[::-1], axis=1)
+            )[0]
+            face_BC_indices += list(face_nodes_indices[filtered_face_BC_indicies]) # Convert filtered face index to real face index before appendin
+
+        if len(face_BC_indices) < 1:
+            raise ValueError(f"Edge {edge_index_BC} (index={i}) has no corresponding faces in {mesh}.")
+        else:
+            if len(face_BC_indices) > 1:
+                print(f"Ignoring {len(face_BC_indices)-1} additional boundary faces. Edge {edge_index_BC} (index={i}) appears in multiple faces: {face_BC_indices}")
+            face_BC.append(face_BC_indices[0])
 
     return np.array(face_BC)
 
@@ -1361,6 +1377,8 @@ def add_ghost_cells_mesh(mesh):
     dual_edge_index: np.array, shape (2, num_dual_edges+num_ghost_dual_edges)
         this is also converted to undirected
     face_nodes
+
+    Expects that mesh.edge_index_BC and mesh.face_BC are parallel arrays referring to the same boundary edges and corresponding boundary faces.
     """
     if not mesh.added_ghost_cells:
         the_other_node = find_BC_other_nodes(mesh)
@@ -1495,7 +1513,7 @@ def update_ghost_cells_attributes(mesh, *attributes):
 def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
                         with_multiscale=False, number_of_multiscales=4,
                         neighborhood_size_slope=150, min_neighbours_slope=5,
-                        multiscale_mesh_file=None, raw_meshes_file=None):
+                        multiscale_mesh_file=None, raw_meshes=None):
     '''
     Creates a pytorch geometric Data object of a mesh simulation
     ------
@@ -1519,8 +1537,8 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
         minimum number of neighbours in slope evaluation
     multiscale_mesh_file: str, path-like
         path to MultiscaleMesh pickle file (if None, this will be recalculated from polygon file)
-    raw_meshes_file: str, path-like
-        path to list of Meshes pickle file (if None, this will be recalculated from polygon file)
+    raw_meshes: list of Mesh
+        list of Mesh objects (if None, this will be recalculated from polygon file)
     '''
     data = Data()
 
@@ -1544,19 +1562,19 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
                 mesh = pickle.load(f)
         else:
             assert polygon_file is not None, 'polygon_file must be provided if with_multiscale is True'
-            if raw_meshes_file is not None:
-                with open(raw_meshes_file, 'rb') as f:
-                    meshes = pickle.load(f)
+            if raw_meshes is not None:
+                print("Using provided raw meshes")
+                meshes = raw_meshes[:(number_of_multiscales-1)] # Take meshes up to (but not including) the finest resolution
             else:
                 meshes = create_mesh_dhydro(polygon_file, number_of_multiscales-1, for_simulation=False)
-            meshes.append(copy(meshes[0]))
-            meshes[-1]._import_from_map_netcdf(netcdf_file)
+            meshes.append(copy(meshes[0])) # Append a dummy mesh to the end (will be overwritten)
+            meshes[-1]._import_from_map_netcdf(netcdf_file) # Overwrite final mesh with the highest resolution mesh from netcdf_file
             meshes[-1].edge_outward_normal[meshes[-1].edge_BC] *= -1  # reverse the normal of the boundary edges
-            meshes = meshes[::-1]
+            meshes = meshes[::-1] # Arrange meshes from finest to coarsest
 
             # Add boundary conditions to multiscale meshes
             edge_BC_mid = mesh.node_xy[mesh.edge_index_BC].mean(1)
-            meshes = interpolate_BC_location_multiscale(meshes, edge_BC_mid)
+            meshes = interpolate_BC_location_multiscale(meshes, edge_BC_mid) # At every resolution, identify the boundary condition nodes
             meshes = [add_ghost_cells_mesh(mesh) for mesh in meshes]
 
             # create multiscale mesh
@@ -1612,7 +1630,7 @@ def create_mesh_dataset(dataset_folder, sim_ids=[],
                         neighborhood_size_slope=150, min_neighbours_slope=9,
                         netcdf_file_template='output_{}_map.nc', DEM_file_template='dyce_lisfloodfp',
                         hydrograph_file_template='Hydrograph_{}.txt', polygon_file_template='dyce_polygon.pol',
-                        multiscale_mesh_file=None, raw_meshes_file=None
+                        multiscale_mesh_file=None, raw_meshes=None
                         ):
     '''
     Creates a list of pytorch geometric Data objects with n_sim simulations
@@ -1632,8 +1650,8 @@ def create_mesh_dataset(dataset_folder, sim_ids=[],
         minimum number of neighbours in slope evaluation
     multiscale_mesh_file: str, path-like
         path to MultiscaleMesh pickle file (if None, this will be recalculated from polygon file)
-    raw_meshes_file: str, path-like
-        path to list of Meshes pickle file (if None, this will be recalculated from polygon file)
+    raw_meshes: list of Mesh
+        list of Mesh objects (if None, this will be recalculated from polygon file)
     '''
     mesh_dataset = []
     for i in tqdm(sim_ids):
@@ -1649,7 +1667,7 @@ def create_mesh_dataset(dataset_folder, sim_ids=[],
         data = convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file, type_BC=2,
                         with_multiscale=with_multiscale, number_of_multiscales=number_of_multiscales,
                         neighborhood_size_slope=neighborhood_size_slope, 
-                        min_neighbours_slope=min_neighbours_slope, multiscale_mesh_file=multiscale_mesh_file,raw_meshes_file=raw_meshes_file)
+                        min_neighbours_slope=min_neighbours_slope, multiscale_mesh_file=multiscale_mesh_file,raw_meshes=raw_meshes)
         if netcdf_file.endswith(".zst"):
             os.remove(netcdf_file) # remove the uncompressed netcdf file to save space
 
