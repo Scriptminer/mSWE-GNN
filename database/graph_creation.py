@@ -1409,8 +1409,8 @@ def add_ghost_cells_mesh(mesh):
 
         # The ghost nodes are not mirrored correctly so we flip the normal
         if (distance_node_ghost_BC < distance_node_edge_BC).any():
-            edge_outward_normal_faces[:,(distance_node_ghost_BC < distance_node_edge_BC).squeeze()] *= -1
-            edge_outward_normal_nodes[:,(distance_node_ghost_BC < distance_node_edge_BC).squeeze()] *= -1
+            edge_outward_normal_faces[(distance_node_ghost_BC < distance_node_edge_BC).squeeze(), :] *= -1
+            edge_outward_normal_nodes[(distance_node_ghost_BC < distance_node_edge_BC).squeeze(), :] *= -1
 
             ghost_face_BC_xy = face_symmetry_point - edge_outward_normal_faces[:,normal_adapter]*distance_face_edge_BC
             ghost_node_BC_xy = node_symmetry_point - edge_outward_normal_nodes[:,normal_adapter]*distance_node_edge_BC
