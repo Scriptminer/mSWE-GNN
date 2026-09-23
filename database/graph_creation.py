@@ -1657,7 +1657,7 @@ def create_mesh_dataset(dataset_folder, sim_ids=[],
                         neighborhood_size_slope=150, min_neighbours_slope=9,
                         netcdf_file_template='output_{}_map.nc', DEM_file_template='dyce_lisfloodfp',
                         hydrograph_file_template='Hydrograph_{}.txt', polygon_file_template='dyce_polygon.pol',
-                        multiscale_mesh_file=None, raw_meshes=None, template_only=False
+                        multiscale_mesh_file=None, raw_meshes=None, type_BC=2, template_only=False
                         ):
     '''
     Creates a list of pytorch geometric Data objects with n_sim simulations
@@ -1679,6 +1679,8 @@ def create_mesh_dataset(dataset_folder, sim_ids=[],
         path to MultiscaleMesh pickle file (if None, this will be recalculated from polygon file)
     raw_meshes: list of Mesh
         list of Mesh objects (if None, this will be recalculated from polygon file)
+    type_BC: int
+        type of boundary condition (1: water level, 2: discharge, ndarray of shape (num_BC_nodes) with type of BC for each node)
     template_only: bool
         if True, only the mesh template is returned (no flow or temporal BC attributes are loaded)
     '''
@@ -1687,18 +1689,18 @@ def create_mesh_dataset(dataset_folder, sim_ids=[],
         netcdf_file = os.path.join(dataset_folder, 'Simulations', netcdf_file_template.format(i))
         DEM_file = os.path.join(dataset_folder,'DEM',DEM_file_template.format(i))
 
-        if hydrograph_file_template is not None:
+        if template_only:
+            BC = None
+        else:
             hydrograph_file = os.path.join(dataset_folder, 'Hydrograph', hydrograph_file_template.format(i))
             BC = np.loadtxt(hydrograph_file)
             BC[:,0] /= 60 # convert to minutes
-        else:
-            # No hydrograph specified, generate mesh dataset without BC
-            BC = None
+            
         polygon_file = os.path.join(dataset_folder, 'Geometry', polygon_file_template.format(i))
         if netcdf_file.endswith(".zst"):
             os.system(f"zstd -df {netcdf_file}")
             netcdf_file = netcdf_file.rstrip(".zst")
-        data = convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file, type_BC=2,
+        data = convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file, type_BC=type_BC,
                         with_multiscale=with_multiscale, number_of_multiscales=number_of_multiscales,
                         neighborhood_size_slope=neighborhood_size_slope, 
                         min_neighbours_slope=min_neighbours_slope, multiscale_mesh_file=multiscale_mesh_file,
@@ -1792,14 +1794,18 @@ def save_database(dataset, name, out_path='datasets', zarr_output=False, skip_pi
     path = f"{base_path}.pkl"
 
     if os.path.exists(path):
+        print(f"File '{path}' already exists, removing.")
         os.remove(path)
         if zarr_output and os.path.exists(f"{base_path}.zarr"):
+            print(f"Removing '{base_path}.zarr'.")
             shutil.rmtree(f"{base_path}.zarr")
     elif not os.path.exists(out_path):
+        print(f"Output directory '{out_path}' does not exist, creating it.")
         os.mkdir(out_path)
     
     if zarr_output:
         zarr_variables = ['WD', 'VX', 'VY']
+        print(f"Exporting dataset to zarr file '{base_path}.zarr' with variables {zarr_variables}.")
         export_zarr_dataset(dataset, f"{base_path}.zarr", zarr_variables)
         if not skip_pickle:
             # Remove zarr variables from dataset to be saved
@@ -1807,9 +1813,11 @@ def save_database(dataset, name, out_path='datasets', zarr_output=False, skip_pi
             for var in zarr_variables:
                 if hasattr(ds_copy, var):
                     delattr(ds_copy, var)
+            print(f"Exporting dataset to pickle file '{path}' without variables {zarr_variables}.")
             pickle.dump(ds_copy, open(f"{base_path}.pkl", "wb"))
     else:
         if not skip_pickle:
+            print(f"Exporting whole dataset to pickle file '{path}'.")
             pickle.dump(dataset, open(path, "wb"))
         
     return None
