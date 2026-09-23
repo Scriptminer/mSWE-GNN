@@ -1528,7 +1528,7 @@ def update_ghost_cells_attributes(mesh, *attributes):
 def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
                         with_multiscale=False, number_of_multiscales=4,
                         neighborhood_size_slope=150, min_neighbours_slope=5,
-                        multiscale_mesh_file=None, raw_meshes=None):
+                        multiscale_mesh_file=None, raw_meshes=None, template_only=False):
     '''
     Creates a pytorch geometric Data object of a mesh simulation
     ------
@@ -1554,21 +1554,26 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
         path to MultiscaleMesh pickle file (if None, this will be recalculated from polygon file)
     raw_meshes: list of Mesh
         list of Mesh objects (if None, this will be recalculated from polygon file)
+    template_only: bool
+        if True, only the mesh template is returned (no flow or temporal BC attributes are loaded)
     '''
     data = Data()
 
     # Import mesh attributes (water depth, velocity, slopes, etc.)
     nc_dataset = xr.open_dataset(netcdf_file)
 
-    WD = nc_dataset['mesh2d_waterdepth'].data.T
-    VX = nc_dataset['mesh2d_ucx'].data.T
-    VY = nc_dataset['mesh2d_ucy'].data.T
+    if not template_only:
+        WD = nc_dataset['mesh2d_waterdepth'].data.T
+        VX = nc_dataset['mesh2d_ucx'].data.T
+        VY = nc_dataset['mesh2d_ucy'].data.T
 
     mesh = Mesh()
     mesh._import_from_map_netcdf(netcdf_file)
     mesh._import_DEM(DEM_file)
     DEM = mesh.DEM
     mesh = add_ghost_cells_mesh(mesh)
+
+    attributes = (DEM,) if template_only else (DEM, WD, VX, VY)
 
     if with_multiscale:
         # create multiscale meshes
@@ -1603,18 +1608,23 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
         
         # get multiscale attributes
         # mesh.DEM, WD, VX, VY = interpolate_multiscale_attributes(meshes, DEM, WD, VX, VY, method='nearest')
-        DEM, WD, VX, VY = add_ghost_cells_attributes(mesh.meshes[0], DEM, WD, VX, VY) # Was originally immediately before mesh.stack_meshes(meshes), but placing it here is logically equivalent
-        mesh.DEM, WD, VX, VY = pool_multiscale_attributes(mesh, DEM, WD, VX, VY, reduce='mean')
-        mesh.DEM = update_ghost_cells_attributes(mesh, mesh.DEM)[0] #correct ghost cells values after pooling
+        
+        attributes = add_ghost_cells_attributes(mesh.meshes[0], *attributes) # Was originally immediately before mesh.stack_meshes(meshes), but placing it here is logically equivalent
+        attributes = pool_multiscale_attributes(mesh, *attributes, reduce='mean')
+        mesh.DEM = update_ghost_cells_attributes(mesh, attributes[0])[0] #correct ghost cells values after pooling
     else:
-        mesh.DEM, WD, VX, VY = add_ghost_cells_attributes(mesh, mesh.DEM, WD, VX, VY)
+        attributes = add_ghost_cells_attributes(mesh.meshes[0], *attributes)
+        mesh.DEM = attributes[0]
     # slope_x, slope_y = get_slopes(mesh.face_xy, mesh.DEM, neighborhood_size=neighborhood_size_slope, 
     #                                   min_neighbours=min_neighbours_slope)
     
+    DEM = attributes[0]
     data.DEM = torch.FloatTensor(mesh.DEM)
-    data.WD = torch.FloatTensor(WD)
-    data.VX = torch.FloatTensor(VX)
-    data.VY = torch.FloatTensor(VY)
+    if not template_only:
+        WD, VX, VY = attributes[1:]
+        data.WD = torch.FloatTensor(WD)
+        data.VX = torch.FloatTensor(VX)
+        data.VY = torch.FloatTensor(VY)
     # data.slopex = torch.FloatTensor(slope_x)
     # data.slopey = torch.FloatTensor(slope_y)
     
@@ -1635,7 +1645,9 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
     if with_multiscale:
         data.node_BC = data.node_BC[:len(mesh.ghost_cells_ids)//number_of_multiscales] # select BC only at the finest scale
         data.edge_BC_length = data.edge_BC_length[:len(mesh.ghost_cells_ids)//number_of_multiscales] # select BC+edge only at the finest scale
-    data.BC = torch.FloatTensor(BC).unsqueeze(0).repeat(len(data.node_BC), 1, 1) # This repeats the same BC
+
+    if not template_only:
+        data.BC = torch.FloatTensor(BC).unsqueeze(0).repeat(len(data.node_BC), 1, 1) # This repeats the same BC
     data.type_BC = torch.tensor(type_BC, dtype=torch.int)
 
     return data
@@ -1645,7 +1657,7 @@ def create_mesh_dataset(dataset_folder, sim_ids=[],
                         neighborhood_size_slope=150, min_neighbours_slope=9,
                         netcdf_file_template='output_{}_map.nc', DEM_file_template='dyce_lisfloodfp',
                         hydrograph_file_template='Hydrograph_{}.txt', polygon_file_template='dyce_polygon.pol',
-                        multiscale_mesh_file=None, raw_meshes=None
+                        multiscale_mesh_file=None, raw_meshes=None, template_only=False
                         ):
     '''
     Creates a list of pytorch geometric Data objects with n_sim simulations
@@ -1667,22 +1679,31 @@ def create_mesh_dataset(dataset_folder, sim_ids=[],
         path to MultiscaleMesh pickle file (if None, this will be recalculated from polygon file)
     raw_meshes: list of Mesh
         list of Mesh objects (if None, this will be recalculated from polygon file)
+    template_only: bool
+        if True, only the mesh template is returned (no flow or temporal BC attributes are loaded)
     '''
     mesh_dataset = []
     for i in tqdm(sim_ids):
         netcdf_file = os.path.join(dataset_folder, 'Simulations', netcdf_file_template.format(i))
         DEM_file = os.path.join(dataset_folder,'DEM',DEM_file_template.format(i))
-        hydrograph_file = os.path.join(dataset_folder, 'Hydrograph', hydrograph_file_template.format(i))
+
+        if hydrograph_file_template is not None:
+            hydrograph_file = os.path.join(dataset_folder, 'Hydrograph', hydrograph_file_template.format(i))
+            BC = np.loadtxt(hydrograph_file)
+            BC[:,0] /= 60 # convert to minutes
+        else:
+            # No hydrograph specified, generate mesh dataset without BC
+            BC = None
         polygon_file = os.path.join(dataset_folder, 'Geometry', polygon_file_template.format(i))
-        BC = np.loadtxt(hydrograph_file)
-        BC[:,0] /= 60 # convert to minutes
         if netcdf_file.endswith(".zst"):
             os.system(f"zstd -df {netcdf_file}")
             netcdf_file = netcdf_file.rstrip(".zst")
         data = convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file, type_BC=2,
                         with_multiscale=with_multiscale, number_of_multiscales=number_of_multiscales,
                         neighborhood_size_slope=neighborhood_size_slope, 
-                        min_neighbours_slope=min_neighbours_slope, multiscale_mesh_file=multiscale_mesh_file,raw_meshes=raw_meshes)
+                        min_neighbours_slope=min_neighbours_slope, multiscale_mesh_file=multiscale_mesh_file,
+                        raw_meshes=raw_meshes, template_only=template_only
+        )
         if netcdf_file.endswith(".zst"):
             os.remove(netcdf_file) # remove the uncompressed netcdf file to save space
 
