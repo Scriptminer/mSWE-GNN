@@ -1348,6 +1348,11 @@ def find_face_BC(mesh):
     face_nodes_indices = np.where(np.isin(all_face_nodes, mesh.edge_index_BC.flatten()).sum(1)>0)[0]
     filtered_face_nodes = all_face_nodes[face_nodes_indices]
 
+    # To handle meshes with mixed polygon shapes, on fewer-sided polygons repeat the final node to replace NaN nodes
+    # Edge searching will still proceed as normal, this just introduces new "edges" between identical nodes which will never match
+    for i in range(1, filtered_face_nodes.shape[1]):
+        filtered_face_nodes[:, i] = np.where(np.isnan(filtered_face_nodes[:,i]), filtered_face_nodes[:,i-1], filtered_face_nodes[:,i])
+
     # For each face, set the last face node equal to first face node to simplify circular iterations
     filtered_face_nodes = np.hstack([filtered_face_nodes, filtered_face_nodes[:,:1]]).astype(int)
 
@@ -1364,7 +1369,7 @@ def find_face_BC(mesh):
                 np.all(filtered_face_nodes[:,j:j+2] == edge_index_BC, axis=1) |
                 np.all(filtered_face_nodes[:,j:j+2] == edge_index_BC[::-1], axis=1)
             )[0]
-            face_BC_indices += list(face_nodes_indices[filtered_face_BC_indicies]) # Convert filtered face index to real face index before appendin
+            face_BC_indices += list(face_nodes_indices[filtered_face_BC_indicies]) # Convert filtered face index to real face index before appending
 
         if len(face_BC_indices) < 1:
             raise ValueError(f"Edge {edge_index_BC} (index={i}) has no corresponding faces in {mesh}.")
