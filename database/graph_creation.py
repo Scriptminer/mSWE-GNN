@@ -5,7 +5,7 @@ import os
 import matplotlib as mpl
 from matplotlib.collections import PatchCollection
 from matplotlib.path import Path
-from typing import List, Tuple
+from typing import List, Literal, Tuple
 import pickle
 from tqdm import tqdm
 from copy import copy
@@ -473,7 +473,7 @@ def create_mesh_triangle(vertices, segments=None, holes=None, max_area=5, max_sm
     return mesh
 
 def create_mesh_dhydro(polygon_file='random_polygon.pol', number_of_multiscales=4,
-                       for_simulation=True):
+                       for_simulation=True, max_segment_length=0.04, segmentation_length_type: Literal["perimeter", "absolute"]="perimeter"):
     '''Creates a fine mesh or a multiscale mesh using meshkernel
     
     ------
@@ -483,13 +483,18 @@ def create_mesh_dhydro(polygon_file='random_polygon.pol', number_of_multiscales=
         number of multiscale levels/number of refinement operations
     for_simulation: bool
         if True, returns the fine mesh, otherwise returns the multiscale mesh
+    max_segment_length: float
+        maximum segment length for the boundary polygon, if segmentation_length_type is "perimeter", this value is a fraction of the perimeter, otherwise it is an absolute value
+    segmentation_length_type: Literal["perimeter", "absolute"]
+        if "perimeter", max_segment_length is a fraction of the perimeter, if "absolute", max_segment_length is an absolute value
     '''
 
     with open(polygon_file) as file:
         boundary_nodes = np.array([[value for value in line.strip().split(",")] for line in file.readlines()[2:]], dtype=np.double)
 
     perimeter = shapely.geometry.LineString(boundary_nodes)
-    boundary_nodes = np.array(shapely.segmentize(perimeter, max_segment_length=perimeter.length/25).coords.xy).T
+    max_segment_length = max_segment_length if segmentation_length_type == "absolute" else perimeter.length * max_segment_length
+    boundary_nodes = np.array(shapely.segmentize(perimeter, max_segment_length=max_segment_length).coords.xy).T
     boundary_polygon = GeometryList(boundary_nodes[:,0].copy(), boundary_nodes[:,1].copy())
     inner_boundary = Polygon(boundary_nodes).buffer(-0.01) # Boundary polygon which excludes boundary nodes
     inner_boundary_polygon = GeometryList(np.array(inner_boundary.exterior.coords)[:,0].copy(), np.array(inner_boundary.exterior.coords)[:,1].copy())
@@ -499,12 +504,15 @@ def create_mesh_dhydro(polygon_file='random_polygon.pol', number_of_multiscales=
     mk.mesh2d_make_triangular_mesh_from_polygon(boundary_polygon)
     
     for i in range(number_of_multiscales):
+        print(f"Computing mesh for multiscale level {i+1}/{number_of_multiscales}")
+        print(f"    Orthogonalizing mesh for multiscale level {i+1}/{number_of_multiscales}")
         mk.mesh2d_compute_orthogonalization(ProjectToLandBoundaryOption(0), OrthogonalizationParameters(
                     outer_iterations=25, boundary_iterations=25, inner_iterations=25, 
                     orthogonalization_to_smoothing_factor=0.975),
                     boundary_polygon, inner_boundary_polygon)
         
         if i == number_of_multiscales-1:
+            print(f"    Deleting small flow edges and triangles for multiscale level {i+1}/{number_of_multiscales}")
             mk.mesh2d_delete_small_flow_edges_and_small_triangles(
             small_flow_edges_length_threshold=0.1, min_fractional_area_triangles=2.0)
             
@@ -513,9 +521,11 @@ def create_mesh_dhydro(polygon_file='random_polygon.pol', number_of_multiscales=
         meshes.append(mesh)
 
         if i < number_of_multiscales-1:
+            print(f"    Refining mesh for multiscale level {i+1}/{number_of_multiscales}")
             refinement_parameters = MeshRefinementParameters(refine_intersected=True, min_edge_size=0.5, 
                                                         max_refinement_iterations=1, smoothing_iterations=5)
             mk.mesh2d_refine_based_on_polygon(boundary_polygon, refinement_parameters)
+            print(f"    Generated {mesh}")
         
     if for_simulation:
         output_mesh2d = mk.mesh2d_get()
