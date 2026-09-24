@@ -493,10 +493,17 @@ def apply_boundary_condition(x_d, BC, node_BC, type_BC=2):
     type_BC:
         1: Inflow water depth h 
         2: Inflow discharge |q|
-    '''    
-    check_type_BC(type_BC, NUM_WATER_VARS)
-    
-    x_d[node_BC, (type_BC-1)::NUM_WATER_VARS] = BC
+        ndarray of 1 or 2: Array specifying type_BC for each node_BC individually
+    '''
+    if len(np.shape(type_BC)) > 0:
+        assert type_BC.shape == node_BC.shape, f"Expected type_BC to be same shape as node_BC. Expected {node_BC.shape}, got {type_BC.shape}"
+        # Separate boundary nodes by boundary type, and apply to each boundary type in turn
+        for type_BC_value in np.unique(type_BC):
+            check_type_BC(type_BC_value, NUM_WATER_VARS)
+            x_d[node_BC[type_BC == type_BC_value], (type_BC_value-1)::NUM_WATER_VARS] = BC # Only apply to boundary nodes whose type is type_BC_value
+    else:
+        check_type_BC(type_BC, NUM_WATER_VARS)
+        x_d[node_BC, (type_BC-1)::NUM_WATER_VARS] = BC
 
     return x_d
 
