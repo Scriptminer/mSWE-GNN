@@ -1,3 +1,4 @@
+import enum
 import numpy as np
 import networkx as nx
 import triangle as tr
@@ -993,6 +994,11 @@ class MultiscaleMesh(Mesh):
         return 'MultiscaleMesh object with {} meshes, {} nodes, {} edges, {} faces, and {} dual edges'.format(
             self.num_meshes, self.node_x.shape[0], self.edge_index.shape[1], self.face_x.shape[0], self.dual_edge_index.shape[1])
     
+
+class BC_Datasource(enum.IntEnum):
+    INDEX = 0
+    VALUE = 1
+
 def rotate_mesh(mesh, angle):
     """Data augmentation: rotate the mesh by a given angle
     
@@ -1525,7 +1531,7 @@ def update_ghost_cells_attributes(mesh, *attributes):
 
     return attributes
 
-def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
+def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2, source_BC=[[BC_Datasource.INDEX, 0]],
                         with_multiscale=False, number_of_multiscales=4,
                         neighborhood_size_slope=150, min_neighbours_slope=5,
                         multiscale_mesh_file=None, raw_meshes=None, template_only=False):
@@ -1542,6 +1548,8 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
         path to polygon file (only required if with_multiscale is True)
     type_BC: int
         type of boundary condition (1: water level, 2: discharge)
+    source_BC: list
+        list of (data source, value) pairs for each BC node (e.g., [[BC_Datasource.INDEX, 0], [BC_Datasource.VALUE, 0.123], ...])
     with_multiscale: bool
         if True, data.mesh is a list of multiscale meshes
     number_of_multiscales: int
@@ -1649,6 +1657,7 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
     if not template_only:
         data.BC = torch.FloatTensor(BC).unsqueeze(0).repeat(len(data.node_BC), 1, 1) # This repeats the same BC
     data.type_BC = torch.tensor(type_BC, dtype=torch.int)
+    data.source_BC = torch.FloatTensor(source_BC)
 
     return data
 
@@ -1657,7 +1666,7 @@ def create_mesh_dataset(dataset_folder, sim_ids=[],
                         neighborhood_size_slope=150, min_neighbours_slope=9,
                         netcdf_file_template='output_{}_map.nc', DEM_file_template='dyce_lisfloodfp',
                         hydrograph_file_template='Hydrograph_{}.txt', polygon_file_template='dyce_polygon.pol',
-                        multiscale_mesh_file=None, raw_meshes=None, type_BC=2, template_only=False
+                        multiscale_mesh_file=None, raw_meshes=None, type_BC=2, source_BC=[[BC_Datasource.INDEX, 0]], template_only=False
                         ):
     '''
     Creates a list of pytorch geometric Data objects with n_sim simulations
@@ -1681,6 +1690,8 @@ def create_mesh_dataset(dataset_folder, sim_ids=[],
         list of Mesh objects (if None, this will be recalculated from polygon file)
     type_BC: int
         type of boundary condition (1: water level, 2: discharge, ndarray of shape (num_BC_nodes) with type of BC for each node)
+    source_BC: list
+        list of (data source, value) pairs for each BC node (e.g., [[BC_Datasource.INDEX, 0], [BC_Datasource.VALUE, 0.123], ...])
     template_only: bool
         if True, only the mesh template is returned (no flow or temporal BC attributes are loaded)
     '''
@@ -1700,7 +1711,7 @@ def create_mesh_dataset(dataset_folder, sim_ids=[],
         if netcdf_file.endswith(".zst"):
             os.system(f"zstd -df {netcdf_file}")
             netcdf_file = netcdf_file.rstrip(".zst")
-        data = convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file, type_BC=type_BC,
+        data = convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file, type_BC=type_BC, source_BC=source_BC,
                         with_multiscale=with_multiscale, number_of_multiscales=number_of_multiscales,
                         neighborhood_size_slope=neighborhood_size_slope, 
                         min_neighbours_slope=min_neighbours_slope, multiscale_mesh_file=multiscale_mesh_file,

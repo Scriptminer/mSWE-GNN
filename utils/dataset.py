@@ -5,7 +5,7 @@ from torch_geometric.utils import scatter
 import numpy as np
 import os
 
-from database.graph_creation import MultiscaleMesh, rotate_mesh
+from database.graph_creation import BC_Datasource, MultiscaleMesh, rotate_mesh
 from utils.load import load_dataset
 from utils.scaling import get_scalers
 from sklearn.model_selection import train_test_split
@@ -463,7 +463,9 @@ def to_temporal(data, previous_t=2, time_start=0, time_stop=-1, rollout_steps=1)
         temp.previous_t = previous_t
         temp.node_BC = data.node_BC
         temp.type_BC = data.type_BC
-        
+        temp.source_BC = data.source_BC if 'source_BC' in data.keys() else [[BC_Datasource.INDEX, 0]] # Set to default (use first index hydrograph for all BC nodes) if not present
+        print(f"WARNING: The source_BC is not present in the dataset. Using default value [[BC_Datasource.INDEX, 0]] for all BC nodes. This may lead to unexpected results if multiple hydrographs should be used.")
+
         if 'mesh' in data.keys() and isinstance(data.mesh, MultiscaleMesh):
             temp.node_ptr = data.node_ptr
             temp.edge_ptr = data.edge_ptr
@@ -487,20 +489,31 @@ def get_edge_BC(node_BC, edge_index):
     edge_BC = torch.cat([torch.where(node == edge_index)[1] for node in node_BC])
     return edge_BC
 
-def apply_boundary_condition(x_d, BC, node_BC, type_BC=2):
+def apply_boundary_condition(x_d, BC, node_BC, type_BC=2, source_BC=[[BC_Datasource.INDEX, 0]]):
     '''
     Apply inflow boundary condition BC to nodes node_BC
     type_BC:
         1: Inflow water depth h 
         2: Inflow discharge |q|
         ndarray of 1 or 2: Array specifying type_BC for each node_BC individually
+    source_BC:
+        BC_Datasource.INDEX - treat 2nd column as an index into BC to select which hydrograph to read
+        BC_Datasource.VALUE - treat 2nd column as fixed BC value for this node
     '''
     if len(np.shape(type_BC)) > 0:
         assert type_BC.shape == node_BC.shape, f"Expected type_BC to be same shape as node_BC. Expected {node_BC.shape}, got {type_BC.shape}"
+        assert source_BC.shape[0] == node_BC.shape[0], f"Expected source_BC to have same length as node_BC. Expected {node_BC.shape[0]}, got {source_BC.shape[0]}"
         # Separate boundary nodes by boundary type, and apply to each boundary type in turn
         for type_BC_value in np.unique(type_BC):
+            # Only apply to boundary nodes whose type is type_BC_value
             check_type_BC(type_BC_value, NUM_WATER_VARS)
-            x_d[node_BC[type_BC == type_BC_value], (type_BC_value-1)::NUM_WATER_VARS] = BC # Only apply to boundary nodes whose type is type_BC_value
+            nodes_matching_type = node_BC[type_BC == type_BC_value]
+            sources_matching_type = source_BC[type_BC == type_BC_value]
+            index_mask = sources_matching_type[:,0] == BC_Datasource.INDEX
+            value_mask = sources_matching_type[:,0] == BC_Datasource.VALUE
+            x_d[nodes_matching_type[index_mask], (type_BC_value-1)::NUM_WATER_VARS] = BC[index_mask][sources_matching_type[index_mask][:,1]] # For nodes who have an "index" datasource, use their source value as a lookup into BC to get BC values
+            x_d[nodes_matching_type[value_mask], (type_BC_value-1)::NUM_WATER_VARS] = sources_matching_type[value_mask][:,1] # For nodes who have a "value" datasource, use this value as the BC value
+            # x_d[nodes_matching_type, (type_BC_value-1)::NUM_WATER_VARS] = BC # Only apply to boundary nodes whose type is type_BC_value
     else:
         check_type_BC(type_BC, NUM_WATER_VARS)
         x_d[node_BC, (type_BC-1)::NUM_WATER_VARS] = BC

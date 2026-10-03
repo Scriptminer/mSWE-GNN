@@ -29,6 +29,7 @@ def adapt_batch_training(batch):
     temp.node_BC = torch.cat([temp.ptr[i]+temp[i].node_BC for i in range(temp.num_graphs)])
     temp.temporal_res = temp.temporal_res[0]
     temp.type_BC = temp.type_BC[0]
+    temp.source_BC = temp.source_BC[0]
     temp.previous_t = temp.previous_t[0]
     if 'edge_ptr' in temp.keys():
         update_batch_multiscale(temp)    
@@ -98,7 +99,7 @@ def rollout_test(model, batch):
     for time_step in range(final_step):
         temp.x[:,-dynamic_vars:] = apply_boundary_condition(temp.x[:,-dynamic_vars:], 
                                                             temp.BC[:,:,time_step], 
-                                                            temp.node_BC, type_BC=temp.type_BC)
+                                                            temp.node_BC, type_BC=temp.type_BC, source_BC=temp.source_BC)
         pred = model(temp)
         temp.x = use_prediction(temp.x, pred, model.previous_t)
         predicted_rollout.append(pred)
@@ -141,7 +142,7 @@ class LightningTrainer(L.LightningModule):
         for i in range(self.rollout_steps):
             temp.x[:,-self.dynamic_vars:] = apply_boundary_condition(temp.x[:,-self.dynamic_vars:], 
                                                                 temp.BC[:,:,i], temp.node_BC, 
-                                                                type_BC=temp.type_BC)
+                                                                type_BC=temp.type_BC, source_BC=temp.source_BC)
             # Model prediction
             preds = self.model(temp)
 
@@ -297,7 +298,6 @@ class ZarrDataset(torch_geometric.data.Dataset):
             n_timesteps = self.previous_t + self.rollout_steps
         zarr_data = self.dataset_zarrs[dataset_idx]  # Dataset zarr file containing zarr data for the desired item
         
-        print(f"Getting sample {internal_idx} in dataset {dataset_idx}")
         if self.sequential_access:
             zarr_data.load()
 
@@ -306,7 +306,7 @@ class ZarrDataset(torch_geometric.data.Dataset):
                 temporal_slice = np.s_[:, :clip_length] # If clip_length is None, take all timesteps
             else:
                 temporal_slice = np.s_[:, internal_idx : internal_idx+n_timesteps] # Extract only the required part of the Zarr file
-            print(f"Getting slice {temporal_slice} for variable {data_var} (whole_dataset={whole_dataset})")
+            print(f"Getting slice {temporal_slice} for variable {data_var} (whole_dataset={whole_dataset}) of shape {zarr_data[data_var][temporal_slice].shape}")
             data[data_var] = torch.FloatTensor(zarr_data[data_var][temporal_slice].values) # Extract only the required part of the Zarr file
         
         # Create x, edge_attr, y
