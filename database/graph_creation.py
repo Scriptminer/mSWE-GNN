@@ -516,6 +516,7 @@ def create_mesh_dhydro(polygon_file='random_polygon.pol', number_of_multiscales=
             print(f"    Deleting small flow edges and triangles for multiscale level {i+1}/{number_of_multiscales}")
             mk.mesh2d_delete_small_flow_edges_and_small_triangles(
             small_flow_edges_length_threshold=0.1, min_fractional_area_triangles=2.0)
+            print(f"    Generated {mesh}")
             
         mesh = Mesh()
         mesh._import_from_meshkernel(mk)
