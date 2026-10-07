@@ -53,7 +53,7 @@ def main(config):
             dataset_names=dataset_names,
             dataset_path="./database/datasets/train/dyce",
             mesh_common_file=config["dataset_parameters"]["mesh"], #"./database/raw_datasets_dyce/dataset_dyce.pkl",
-            sequential_access=(name=="test")
+            sequential_access=False #(name=="test") Whether to preload entire dataset
         ))
         print("DATASET DONE!!!")
         print()

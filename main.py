@@ -8,7 +8,7 @@ import time
 import matplotlib.pyplot as plt
 import lightning as L
 from torch_geometric.data import DataLoader
-from lightning.pytorch.loggers import WandbLogger
+from lightning.pytorch.loggers import CSVLogger, WandbLogger
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 
 from utils.dataset import create_model_dataset, to_temporal_dataset
@@ -45,8 +45,7 @@ def main(config):
      
     datasets = []
     for name, dataset_names in [("train", train_names), ("val", val_names), ("test", test_names)]:
-        print(f"DATASET {name}!!!")
-        print(dataset_names)
+        print(f"DATASET {name}: {dataset_names}")
         datasets.append(ZarrDataset(
             root=None,
             dataset_parameters=config['dataset_parameters'],
@@ -115,7 +114,8 @@ def main(config):
 
     pldatamodule = DataModule(temporal_train_dataset, temporal_val_dataset,
             batch_size=trainer_options['batch_size'],
-            train_dataloader_params={"num_workers":NUM_WORKERS,"persistent_workers":True},val_dataloader_params={"num_workers":NUM_WORKERS,"persistent_workers":True})
+            #train_dataloader_params={"num_workers":NUM_WORKERS,"persistent_workers":True},val_dataloader_params={"num_workers":NUM_WORKERS,"persistent_workers":True})
+            train_dataloader_params={"num_workers":0,"persistent_workers":False},val_dataloader_params={"num_workers":0,"persistent_workers":False})
 
     # Number of parameters
     total_parameteres = sum(p.numel() for p in model.parameters())
@@ -142,13 +142,18 @@ def main(config):
     ckpt_path = config.get("saved_model",None)
 
     # Define trainer
+    experiment_name = f"dyce_{datetime.datetime.strftime(datetime.datetime.now(),'%Y-%m-%d_%H%M')}"
+    logger = CSVLogger("logs", name=experiment_name)
+    print("Initialising trainer...")
     trainer = L.Trainer(accelerator="auto", devices='auto',
                         max_epochs=trainer_options['max_epochs'],
                         gradient_clip_val=1, # Bentivoglio et al., 2026 has "2", 2025 has "1"
                         precision='16-mixed',
+                        log_every_n_steps=1,
+                        check_val_every_n_epoch=5,
                         enable_progress_bar=True,
                         detect_anomaly=False, # Was True
-                        logger=wandb_logger,
+                        logger=logger,
                         callbacks=[checkpoint_callback, 
                                 curriculum_callback, 
                                 early_stopping,
@@ -156,6 +161,7 @@ def main(config):
                                 ])
     
     # Train and get trained model
+    print("Beginning model fit...")
     trainer.fit(plmodule, pldatamodule, ckpt_path=ckpt_path, weights_only=False)
     print("Model fit done.")
     wandb_logger.experiment.unwatch(model)
