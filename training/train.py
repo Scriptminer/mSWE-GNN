@@ -28,8 +28,8 @@ def adapt_batch_training(batch):
     temp = batch.clone()
     temp.node_BC = torch.cat([temp.ptr[i]+temp[i].node_BC for i in range(temp.num_graphs)])
     temp.temporal_res = temp.temporal_res[0]
-    temp.type_BC = temp.type_BC[0]
-    temp.source_BC = temp.source_BC[0]
+    if temp.source_BC.shape[0] == temp.batch_size:
+        temp.source_BC = temp.source_BC[:1] # Ensure source_BC is not replicated, but retain it's (num BC nodes, 2) shape
     temp.previous_t = temp.previous_t[0]
     if 'edge_ptr' in temp.keys():
         update_batch_multiscale(temp)    
@@ -97,6 +97,7 @@ def rollout_test(model, batch):
     predicted_rollout = []
 
     for time_step in range(final_step):
+        print(f"Predicting step {time_step+1}/{final_step}")
         temp.x[:,-dynamic_vars:] = apply_boundary_condition(temp.x[:,-dynamic_vars:], 
                                                             temp.BC[:,:,time_step], 
                                                             temp.node_BC, type_BC=temp.type_BC, source_BC=temp.source_BC)
