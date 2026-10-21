@@ -129,8 +129,8 @@ def main(config):
                     'trainer_options': trainer_options, 
                     'temporal_test_dataset_parameters': temporal_test_dataset_parameters}
     
-    if 'saved_model' in config:
-        model = plmodule.load_from_checkpoint(config['saved_model'], map_location=device, **plmodule_kwargs)
+    #if 'saved_model' in config:
+    #    model = plmodule.load_from_checkpoint(config['saved_model'], map_location=device, **plmodule_kwargs)
 
     # Define trainer
     trainer = L.Trainer(accelerator="auto", devices='auto',
@@ -155,7 +155,7 @@ def main(config):
     print("Loading model...\n")
     
     plmodule = LightningTrainer.load_from_checkpoint(
-            checkpoint_path="lightning_logs/models/epoch=99-step=3000.ckpt",
+            checkpoint_path="logs/dyce_2026-10-13_0037/version_0/epoch=14-step=18000.ckpt",
             map_location=device,
             weights_only=False,
             **plmodule_kwargs

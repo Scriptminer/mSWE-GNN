@@ -351,7 +351,6 @@ class MSGNN(BaseFloodModel):
         
         # Mask very small water depth
         x = self._mask_small_WD(x, epsilon=0.0001)
-        print(f"CUDA mem usage (MiB): ", torch.cuda.memory_allocated("cuda:0")/1024/1024, flush=True)
 
         return x
 

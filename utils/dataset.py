@@ -515,7 +515,7 @@ def apply_boundary_condition(x_d, BC, node_BC, type_BC=2, source_BC=torch.FloatT
     if source_BC.shape[0] != BC.shape[0]:
         assert source_BC.shape[0] == 1, f"Cannot convert source_BC (length {source_BC.shape}) to same shape as BC (length {BC.shape})"
         source_BC = source_BC.repeat(BC.shape[0], 1)
-    print(f"source_BC after: {source_BC}")
+    #print(f"source_BC after: {source_BC}")
     if len(np.shape(type_BC)) > 0:
         assert type_BC.shape == node_BC.shape, f"Expected type_BC to be same shape as node_BC. Expected {node_BC.shape}, got {type_BC.shape}"
         assert source_BC.shape[0] == node_BC.shape[0], f"Expected source_BC to have same length as node_BC. Expected {node_BC.shape[0]}, got {source_BC.shape[0]}"

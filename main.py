@@ -28,7 +28,8 @@ NUM_WORKERS = torch.get_num_threads()
 
 def main(config):
     L.seed_everything(config.models['seed'])
-
+    
+    torch.multiprocessing.set_start_method('forkserver', force=True)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     dataset_parameters = config.dataset_parameters
@@ -114,8 +115,8 @@ def main(config):
 
     pldatamodule = DataModule(temporal_train_dataset, temporal_val_dataset,
             batch_size=trainer_options['batch_size'],
-            #train_dataloader_params={"num_workers":NUM_WORKERS,"persistent_workers":True},val_dataloader_params={"num_workers":NUM_WORKERS,"persistent_workers":True})
-            train_dataloader_params={"num_workers":0,"persistent_workers":False},val_dataloader_params={"num_workers":0,"persistent_workers":False})
+            train_dataloader_params={"num_workers":NUM_WORKERS,"persistent_workers":True},val_dataloader_params={"num_workers":NUM_WORKERS,"persistent_workers":True})
+            #train_dataloader_params={"num_workers":0,"persistent_workers":False},val_dataloader_params={"num_workers":0,"persistent_workers":False})
 
     # Number of parameters
     total_parameteres = sum(p.numel() for p in model.parameters())
@@ -150,7 +151,7 @@ def main(config):
                         gradient_clip_val=1, # Bentivoglio et al., 2026 has "2", 2025 has "1"
                         precision='16-mixed',
                         log_every_n_steps=1,
-                        check_val_every_n_epoch=5,
+                        check_val_every_n_epoch=1,
                         enable_progress_bar=True,
                         detect_anomaly=False, # Was True
                         logger=logger,

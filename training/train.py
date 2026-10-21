@@ -15,8 +15,6 @@ from torch_geometric.data.batch import Batch
 import torch_geometric.data
 import xarray as xr
 
-from torch.profiler import profile, ProfilerActivity, record_function
-
 from training.loss import loss_function
 from utils.miscellaneous import get_rollout_loss, get_CSI
 from utils.dataset import use_prediction, apply_boundary_condition, create_data_attr, to_temporal, get_temporal_samples_size
@@ -98,9 +96,11 @@ def rollout_test(model, batch):
 
     for time_step in range(final_step):
         print(f"Predicting step {time_step+1}/{final_step}")
+        #print(f"temp.x[temp.node_BC] before: {temp.x[temp.node_BC]}")
         temp.x[:,-dynamic_vars:] = apply_boundary_condition(temp.x[:,-dynamic_vars:], 
                                                             temp.BC[:,:,time_step], 
                                                             temp.node_BC, type_BC=temp.type_BC, source_BC=temp.source_BC)
+        #print(f"temp.x[temp.node_BC] after: {temp.x[temp.node_BC]}")
         pred = model(temp)
         temp.x = use_prediction(temp.x, pred, model.previous_t)
         predicted_rollout.append(pred)
@@ -120,7 +120,6 @@ class LightningTrainer(L.LightningModule):
             temporal test dataset parameters
         '''
         super().__init__()
-        # self.save_hyperparameters()
         self.model = model
         self.dynamic_vars = self.model.previous_t*self.model.NUM_WATER_VARS
         self.lr_info = lr_info
@@ -134,6 +133,7 @@ class LightningTrainer(L.LightningModule):
         self.rollout_steps = 1
         assert self.type_loss in ['RMSE','MAE'], "loss_type must be either 'RMSE' or 'MAE'"        
         self.curriculum_epoch = trainer_options['curriculum_epoch']
+        self.save_hyperparameters()
         
     def training_step(self, batch):
         self.log("rollout_steps", torch.tensor(self.rollout_steps, dtype=torch.float32), on_step=False, on_epoch=True)
@@ -141,18 +141,28 @@ class LightningTrainer(L.LightningModule):
         roll_loss = []
         #torch.cuda.memory._record_memory_history(max_entries=100000)
         for i in range(self.rollout_steps):
+            #print(f"temp.x[temp.node_BC] before: {temp.x[temp.node_BC]}")
+            timer = datetime.datetime.now()
             temp.x[:,-self.dynamic_vars:] = apply_boundary_condition(temp.x[:,-self.dynamic_vars:], 
                                                                 temp.BC[:,:,i], temp.node_BC, 
                                                                 type_BC=temp.type_BC, source_BC=temp.source_BC)
+            self.log(f"time_apply_boundary_condition_{i}", datetime.datetime.now() - timer)
+            #print(f"temp.x[temp.node_BC] after: {temp.x[temp.node_BC]}")
             # Model prediction
+            timer = datetime.datetime.now()
             preds = self.model(temp)
-
+            self.log(f"time_model_forward_{i}", datetime.datetime.now() - timer)
+            
+            timer = datetime.datetime.now()
             temp.x = use_prediction(temp.x, preds, self.model.previous_t)
-
+            self.log(f"time_use_prediction_{i}", datetime.datetime.now() - timer)          
+            
+            timer = datetime.datetime.now()
             loss = loss_function(preds, temp.y[:,:,i], temp, temp.BC[:,-2:,i+1].mean(1), type_loss=self.type_loss, 
                            only_where_water=self.only_where_water, conservation=self.conservation, 
                            velocity_scaler=self.velocity_scaler)
             roll_loss.append(loss)
+            self.log(f"time_compute_loss_{i}", datetime.datetime.now() - timer)          
 
         loss = torch.stack(roll_loss).mean()
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
@@ -269,7 +279,7 @@ class ZarrDataset(torch_geometric.data.Dataset):
             ds.WD.shape[1] - (self.previous_t-1) - self.rollout_steps
             for ds in self.dataset_zarrs
         ]
-        self.dataset_lengths = [min(50,l) for l in self.dataset_lengths]
+        self.dataset_lengths = [min(800,l) for l in self.dataset_lengths]
         self.start_indices = np.cumsum([0] + self.dataset_lengths[:-1]) # Overall index of the first item of each simulation dataset, treating datasets as if concatenated in order
         
         self._scalers = None
@@ -285,6 +295,9 @@ class ZarrDataset(torch_geometric.data.Dataset):
             whole_dataset: if False, return a single temporal sample. If True, return a whole non-temporal dataset.
             clip_length: clips whole dataset to first clip_length time steps. Ignored if whole_dataset=False.
         """
+        print("Attempting simple xarray read")
+        print(f"BC metadata: {xr.open_zarr('/users/2687661w/mSWE-GNN/database/datasets/train/dyce/hydrograph_0002_highflow_hightemporalres.zarr','BC')['BC']}")
+        print(f"BC values: {xr.open_zarr('/users/2687661w/mSWE-GNN/database/datasets/train/dyce/hydrograph_0002_highflow_hightemporalres.zarr','BC')['BC'][0].values}")
         # Find mesh data
         data = copy.copy(self.mesh_common) # A new object is created, whose keys all point to the existing (never changing) underlying self.mesh_common object values. Zarr attributes later added to this new data object do not modify self.mesh_common's attributes.
         scalers = get_scalers([data], copy.copy(self.scalers)) if self._scalers is None else self._scalers
@@ -307,7 +320,7 @@ class ZarrDataset(torch_geometric.data.Dataset):
                 temporal_slice = np.s_[:, :clip_length] # If clip_length is None, take all timesteps
             else:
                 temporal_slice = np.s_[:, internal_idx : internal_idx+n_timesteps] # Extract only the required part of the Zarr file
-            print(f"Getting slice {temporal_slice} for variable {data_var} (whole_dataset={whole_dataset}) of shape {zarr_data[data_var][temporal_slice].shape}")
+            #print(f"Getting slice {temporal_slice} for variable {data_var} (whole_dataset={whole_dataset}) of shape {zarr_data[data_var][temporal_slice].shape}")
             data[data_var] = torch.FloatTensor(zarr_data[data_var][temporal_slice].values) # Extract only the required part of the Zarr file
         
         # Create x, edge_attr, y
@@ -315,7 +328,6 @@ class ZarrDataset(torch_geometric.data.Dataset):
         if whole_dataset:
             return dataset
         # Convert to single temporal data object
-        print(f"Creating temporal data object.")
         temporal_data = to_temporal(dataset, self.previous_t, self.time_start, self.time_stop, self.rollout_steps)[0]
         temporal_data.time += internal_idx # Time correction
         return temporal_data
