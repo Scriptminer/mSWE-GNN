@@ -8,9 +8,12 @@
 slurm-*.out
 __pycache__
 *.pyc
+*.ckpt
+logs
 lightning_logs
-<<<<<<< Updated upstream
 wandb
-=======
-wandb
->>>>>>> Stashed changes
+results
+database/datasets/*
+database/raw_datasets*
+
+
