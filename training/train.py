@@ -1,11 +1,11 @@
 # Libraries
 import copy
-import datetime
 import fsspec
 import os
 import numpy as np
 import pickle
 import scipy.spatial
+import time
 import torch
 import torch.optim as optim
 import lightning as L
@@ -142,32 +142,32 @@ class LightningTrainer(L.LightningModule):
         #torch.cuda.memory._record_memory_history(max_entries=100000)
         for i in range(self.rollout_steps):
             #print(f"temp.x[temp.node_BC] before: {temp.x[temp.node_BC]}")
-            timer = datetime.datetime.now()
+            timer = time.time()
             temp.x[:,-self.dynamic_vars:] = apply_boundary_condition(temp.x[:,-self.dynamic_vars:], 
                                                                 temp.BC[:,:,i], temp.node_BC, 
                                                                 type_BC=temp.type_BC, source_BC=temp.source_BC)
-            self.log(f"time_apply_boundary_condition_{i}", datetime.datetime.now() - timer)
+            self.log(f"time_apply_boundary_condition_{i}", time.time() - timer)
             #print(f"temp.x[temp.node_BC] after: {temp.x[temp.node_BC]}")
             # Model prediction
-            timer = datetime.datetime.now()
+            timer = time.time()
             preds = self.model(temp)
-            self.log(f"time_model_forward_{i}", datetime.datetime.now() - timer)
+            self.log(f"time_model_forward_{i}", time.time() - timer)
             
-            timer = datetime.datetime.now()
+            timer = time.time()
             temp.x = use_prediction(temp.x, preds, self.model.previous_t)
-            self.log(f"time_use_prediction_{i}", datetime.datetime.now() - timer)          
+            self.log(f"time_use_prediction_{i}", time.time() - timer)          
             
-            timer = datetime.datetime.now()
+            timer = time.time()
             loss = loss_function(preds, temp.y[:,:,i], temp, temp.BC[:,-2:,i+1].mean(1), type_loss=self.type_loss, 
                            only_where_water=self.only_where_water, conservation=self.conservation, 
                            velocity_scaler=self.velocity_scaler)
             roll_loss.append(loss)
-            self.log(f"time_compute_loss_{i}", datetime.datetime.now() - timer)          
+            self.log(f"time_compute_loss_{i}", time.time() - timer)          
 
         loss = torch.stack(roll_loss).mean()
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         #try:
-        #    torch.cuda.memory._dump_snapshot(f"cuda-mem-snapshot_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f')[:-3]}.pkl")
+        #    torch.cuda.memory._dump_snapshot(f"cuda-mem-snapshot_{time.time().strftime('%Y%m%d-%H%M%S-%f')[:-3]}.pkl")
         #except Exception as e:
         #    print(f"Failed to capture memory snapshot {e}")
         #torch.cuda.memory._record_memory_history(enabled=None)
@@ -296,8 +296,8 @@ class ZarrDataset(torch_geometric.data.Dataset):
             clip_length: clips whole dataset to first clip_length time steps. Ignored if whole_dataset=False.
         """
         print("Attempting simple xarray read")
-        print(f"BC metadata: {xr.open_zarr('/users/2687661w/mSWE-GNN/database/datasets/train/dyce/hydrograph_0002_highflow_hightemporalres.zarr','BC')['BC']}")
-        print(f"BC values: {xr.open_zarr('/users/2687661w/mSWE-GNN/database/datasets/train/dyce/hydrograph_0002_highflow_hightemporalres.zarr','BC')['BC'][0].values}")
+        print(f"BC metadata: {xr.open_zarr('~/mSWE-GNN/database/datasets/train/dyce/hydrograph_0002_highflow_hightemporalres.zarr','BC')['BC']}")
+        print(f"BC values: {xr.open_zarr('~/mSWE-GNN/database/datasets/train/dyce/hydrograph_0002_highflow_hightemporalres.zarr','BC')['BC'][0].values}")
         # Find mesh data
         data = copy.copy(self.mesh_common) # A new object is created, whose keys all point to the existing (never changing) underlying self.mesh_common object values. Zarr attributes later added to this new data object do not modify self.mesh_common's attributes.
         scalers = get_scalers([data], copy.copy(self.scalers)) if self._scalers is None else self._scalers
