@@ -217,7 +217,6 @@ class LightningTrainer(L.LightningModule):
 
 class ZarrDataset(torch_geometric.data.Dataset):
     def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, dataset_parameters=None, temporal_dataset_parameters=None, selected_node_features=None, selected_edge_features=None, scalers=None, device="cpu", dataset_path="", dataset_names=[], mesh_common_file="", sequential_access=False, reproject_zarrs=True):
-        self.save_hyperparameters()
         print("Warning: not yet implemented all parameters from dataset.py, create_model_dataset()")
         if device == "cpu":
             print("Warning: using device CPU for dataset")
@@ -240,11 +239,12 @@ class ZarrDataset(torch_geometric.data.Dataset):
 
         self.device = device
         self.sequential_access = sequential_access
+        self.dataset_names = dataset_names
 
         if reproject_zarrs:
             self.dataset_zarrs = []
             indices = {}
-            for dataset_name in dataset_names:
+            for dataset_name in self.dataset_names:
                 parameters = {
                     param: xr.open_dataset(
                         os.path.join(dataset_path, f"{dataset_name}.zarr"),
@@ -275,8 +275,8 @@ class ZarrDataset(torch_geometric.data.Dataset):
                     reprojected[param]["y"] = face_coords[:,1]
                 self.dataset_zarrs.append(xr.Dataset({"WD":reprojected["wd"], "VX":reprojected["Vx"], "VY":reprojected["Vy"], "BC": parameters["BC"]}).reset_index("nFaces").reset_coords(drop=True))
         else:
-            self.dataset_zarrs = [xr.open_dataset(os.path.join(dataset_path, f"{dataset_name}.zarr")) for dataset_name in dataset_names] # Lazy-load all zarr datasets
-            #self.dataset_zarrs = [self.load_zarr(os.path.join(dataset_path, f"{dataset_name}.zarr")) for dataset_name in dataset_names] # Load all compressed zarr datasets into memory. Omitted as it doesn't seem to be any faster. 
+            self.dataset_zarrs = [xr.open_dataset(os.path.join(dataset_path, f"{dataset_name}.zarr")) for dataset_name in self.dataset_names] # Lazy-load all zarr datasets
+            #self.dataset_zarrs = [self.load_zarr(os.path.join(dataset_path, f"{dataset_name}.zarr")) for dataset_name in self.dataset_names] # Load all compressed zarr datasets into memory. Omitted as it doesn't seem to be any faster. 
         self.dataset_lengths = [
             ds.WD.shape[1] - (self.previous_t-1) - self.rollout_steps
             for ds in self.dataset_zarrs
@@ -374,7 +374,14 @@ class DataModule(L.LightningDataModule):
         self.temporal_val_dataset = temporal_val_dataset
         self.train_dataloader_params = train_dataloader_params
         self.val_dataloader_params = val_dataloader_params
-
+        self.save_hyperparameters(
+            {
+                "train_dataset_lengths": {name: self.temporal_train_dataset.dataset_lengths[i] for i, name in enumerate(self.temporal_train_dataset.dataset_names)},
+                "val_dataset_lengths": {name: self.temporal_val_dataset.dataset_lengths[i] for i, name in enumerate(self.temporal_val_dataset.dataset_names)}
+            },
+            ignore=["temporal_train_dataset","temporal_val_dataset"]
+        )
+    
     def train_dataloader(self):
         return DataLoader(self.temporal_train_dataset, batch_size=self.batch_size, 
                           **self.train_dataloader_params,
