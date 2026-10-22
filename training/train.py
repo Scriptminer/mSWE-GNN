@@ -135,7 +135,11 @@ class LightningTrainer(L.LightningModule):
         
     def training_step(self, batch):
         self.log("rollout_steps", torch.tensor(self.rollout_steps, dtype=torch.float32), on_step=False, on_epoch=True)
+        for action in self.trainer.profiler.recorded_durations:
+            self.log(action, self.trainer.profiler.recorded_durations[action][-1])
+        timer = time.time()
         temp = adapt_batch_training(batch)
+        self.log("time_adapt_batch", time.time() - timer)
         roll_loss = []
         #torch.cuda.memory._record_memory_history(max_entries=100000)
         for i in range(self.rollout_steps):
@@ -213,6 +217,7 @@ class LightningTrainer(L.LightningModule):
 
 class ZarrDataset(torch_geometric.data.Dataset):
     def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, dataset_parameters=None, temporal_dataset_parameters=None, selected_node_features=None, selected_edge_features=None, scalers=None, device="cpu", dataset_path="", dataset_names=[], mesh_common_file="", sequential_access=False, reproject_zarrs=True):
+        self.save_hyperparameters()
         print("Warning: not yet implemented all parameters from dataset.py, create_model_dataset()")
         if device == "cpu":
             print("Warning: using device CPU for dataset")

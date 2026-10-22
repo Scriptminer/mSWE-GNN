@@ -149,6 +149,7 @@ def main(config):
                         gradient_clip_val=1, # Bentivoglio et al., 2026 has "2", 2025 has "1"
                         precision='16-mixed',
                         log_every_n_steps=1,
+                        profiler="simple",
                         check_val_every_n_epoch=1,
                         enable_progress_bar=True,
                         detect_anomaly=False, # Was True
