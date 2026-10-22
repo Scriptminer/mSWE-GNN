@@ -18,8 +18,6 @@ from utils.visualization import PlotRollout
 from utils.miscellaneous import get_numerical_times, get_speed_up, get_model, SpatialAnalysis, fix_dict_in_config
 from training.train import LightningTrainer, DataModule, CurriculumLearning, ZarrDataset
 
-from NaNCapture import NaNCapture
-
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision('high')

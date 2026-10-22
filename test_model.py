@@ -5,6 +5,7 @@ import torch
 import wandb
 import time
 import matplotlib.pyplot as plt
+import sys
 import lightning as L
 from torch_geometric.data import DataLoader
 from lightning.pytorch.loggers import WandbLogger
@@ -21,7 +22,7 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision('high')
 
-def main(config):
+def main(config, checkpoint_path):
     L.seed_everything(config.models['seed'])
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -155,7 +156,7 @@ def main(config):
     print("Loading model...\n")
     
     plmodule = LightningTrainer.load_from_checkpoint(
-            checkpoint_path="logs/dyce_2026-10-13_0037/version_0/epoch=14-step=18000.ckpt",
+            checkpoint_path=checkpoint_path,
             map_location=device,
             weights_only=False,
             **plmodule_kwargs
@@ -239,6 +240,12 @@ def main(config):
     print('Training and testing finished!')
 
 if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print("Please specify .ckpt model to test!")
+        quit()
+    elif len(sys.argv) > 2:
+        print(f"Expected one .ckpt model argument, got {len(sys.argv)-1}.")
+        quit()
     wandb.init(mode="disabled")
     # Read configuration file with parameters
     cfg = read_config('config_lisfloodfp_cpu_dyce.yaml')
@@ -252,5 +259,5 @@ if __name__ == '__main__':
     fix_dict_in_config(wandb)
     
     config = wandb.config
-
-    main(config)
+    
+    main(config, checkpoint_path=sys.argv[1])
