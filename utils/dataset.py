@@ -269,17 +269,28 @@ def create_data_attr(datasets, scalers=None, temporal_res=60, original_temporal_
         temp.area = data.area.to(device)
         if 'BC' in data.keys():
             if data.BC.dim() > 2:   #hydrograph BC
-                temp.BC = get_temporal_res(data.BC[:,:,1], temporal_res=temporal_res, original_temporal_res=original_temporal_res)
+                raw_BC = get_temporal_res(data.BC[:,:,1], temporal_res=temporal_res, original_temporal_res=original_temporal_res)
             else:                   #constant BC
                 time_steps = temp.WD.shape[1]
-                temp.BC = torch.ones(time_steps)*data.BC
+                raw_BC = torch.ones(time_steps)*data.BC
             temp.node_BC = data.node_BC.to(device)
-            temp.type_BC = data.type_BC
+            temp.type_BC = data.type_BC if len(np.shape(data.type_BC)) > 0 else torch.tensor([data.type_BC] * len(temp.node_BC))
+            assert temp.type_BC.shape == temp.node_BC.shape, f"Shape of type_BC ({temp.type_BC.shape}) does not match shape of node_BC ({temp.node_BC.shape})"
+            # Compute (n_BC_nodes, n_timesteps) boundary conditions tensor from supplied boundary conditions array and source_BC
             if "source_BC" in data.keys():
-                temp.source_BC = torch.FloatTensor(data.source_BC)
+                assert len(data.source_BC) == 1 or len(data.source_BC) == len(temp.node_BC), f"Length of source_BC (shape {data.source_BC.shape}) does not match length of node_BC ({len(temp.node_BC)}) or length 1."
+                source_BC = torch.FloatTensor(data.source_BC) if len(data.source_BC) > 1 else torch.FloatTensor(data.source_BC.repeat((len(temp.node_BC),1)))
+                assert source_BC.shape == torch.Size( (len(temp.node_BC), 2) ), f"Shape of source_BC (shape {source_BC.shape}) does not match expected shape {torch.Size( (len(temp.node_BC), 2) )}."
             else:
                 print(f"WARNING: The source_BC is not present in the dataset. Using default value [[BC_Datasource.INDEX, 0]] for all BC nodes (e.g., using 0th BC hydrograph values for all BC nodes).")
-                temp.source_BC = torch.FloatTensor([[BC_Datasource.INDEX, 0]]) # Set to default (use first index hydrograph for all BC nodes) if not present
+                source_BC = torch.FloatTensor([[BC_Datasource.INDEX, 0] * len(temp.node_BC)]) # Set to default (use first index hydrograph for all BC nodes) if not present
+            index_mask = source_BC[:,0] == BC_Datasource.INDEX
+            value_mask = source_BC[:,0] == BC_Datasource.VALUE
+            n_BC_nodes, n_timesteps = len(temp.node_BC), raw_BC.shape[1]
+            temp.BC = torch.zeros((n_BC_nodes, n_timesteps), device=device)
+            temp.BC[index_mask] = raw_BC[source_BC[index_mask][:,1].to(int)] # For nodes which have an "index" datasource, use their source value as a lookup into BC to get BC values
+            temp.BC[value_mask] = torch.tile(source_BC[value_mask][:,1], (n_timesteps, 1)).T # For nodes which have a "value" datasource, use this value as the BC value (with this value repeated for all previous timesteps, as this is a non-varying boundary condition)
+            
             temp.edge_BC_length = data.edge_BC_length.to(device)
             temp.BC = temp.BC.to(device)/torch.unsqueeze(temp.edge_BC_length, 0).T # Each BC has its own length associated with it, unsqueeze and transpose to scale BC values by the correct edge length
         
@@ -468,11 +479,6 @@ def to_temporal(data, previous_t=2, time_start=0, time_stop=-1, rollout_steps=1)
         temp.previous_t = previous_t
         temp.node_BC = data.node_BC
         temp.type_BC = data.type_BC
-        if "source_BC" in data.keys():
-            temp.source_BC = torch.FloatTensor(data.source_BC)
-        else:
-            print(f"WARNING: The source_BC is not present in the dataset. Using default value [[BC_Datasource.INDEX, 0]] for all BC nodes (e.g., using 0th BC hydrograph values for all BC nodes).")
-            temp.source_BC = torch.FloatTensor([[BC_Datasource.INDEX, 0]]) # Set to default (use first index hydrograph for all BC nodes) if not present
 
         if 'mesh' in data.keys() and isinstance(data.mesh, MultiscaleMesh):
             temp.node_ptr = data.node_ptr
@@ -497,64 +503,21 @@ def get_edge_BC(node_BC, edge_index):
     edge_BC = torch.cat([torch.where(node == edge_index)[1] for node in node_BC])
     return edge_BC
 
-def apply_boundary_condition(x_d, BC, node_BC, type_BC=2, source_BC=torch.FloatTensor([[BC_Datasource.INDEX, 0]])):
+def apply_boundary_condition(x_d, BC, node_BC, type_BC=2):
     '''
     Apply inflow boundary condition BC to nodes node_BC
     type_BC:
         1: Inflow water depth h 
         2: Inflow discharge |q|
         ndarray of 1 or 2: Array specifying type_BC for each node_BC individually
-    source_BC:
-        BC_Datasource.INDEX - treat 2nd column as an index into BC to select which hydrograph to read
-        BC_Datasource.VALUE - treat 2nd column as fixed BC value for this node
     '''
-    #print(f"type_BC: {type_BC}")
-    #print(f"BC.shape: {BC.shape}, source_BC.shape: {source_BC.shape}")
-    #print(f"source_BC before: {source_BC}")
-    previous_t = BC.shape[1] - 1
-    if source_BC.shape[0] != BC.shape[0]:
-        assert source_BC.shape[0] == 1, f"Cannot convert source_BC (length {source_BC.shape}) to same shape as BC (length {BC.shape})"
-        source_BC = source_BC.repeat(BC.shape[0], 1)
-    #print(f"source_BC after: {source_BC}")
-    if len(np.shape(type_BC)) > 0:
-        assert type_BC.shape == node_BC.shape, f"Expected type_BC to be same shape as node_BC. Expected {node_BC.shape}, got {type_BC.shape}"
-        assert source_BC.shape[0] == node_BC.shape[0], f"Expected source_BC to have same length as node_BC. Expected {node_BC.shape[0]}, got {source_BC.shape[0]}"
-        # Separate boundary nodes by boundary type, and apply to each boundary type in turn
-        for type_BC_value in torch.unique(type_BC):
-            #print(f"Applying BC type={type_BC_value}")
-            #print(f"type_mask: {type_BC == type_BC_value}")
-            # Only apply to boundary nodes whose type is type_BC_value
-            check_type_BC(type_BC_value, NUM_WATER_VARS)
-            nodes_matching_type = node_BC[type_BC == type_BC_value]
-            BC_matching_type = BC[type_BC == type_BC_value]
-            #print(f"Only applying to nodes_matching_type: {nodes_matching_type}")
-            sources_matching_type = source_BC[type_BC == type_BC_value]
-            #print(f"sources_matching_type: {sources_matching_type}")
-            index_mask = sources_matching_type[:,0] == BC_Datasource.INDEX
-            value_mask = sources_matching_type[:,0] == BC_Datasource.VALUE
-            #print(f"index_mask: {index_mask}, value_mask: {value_mask}")
-            #print(f"sources_matching_type[value_mask][:,1].repeat(1, previous_t + 1): {sources_matching_type[value_mask][:,1].repeat(1, previous_t + 1)}")
-            #print(f"BC_matching_type[index_mask][sources_matching_type[index_mask][:,1]]: {BC_matching_type[index_mask][sources_matching_type[index_mask][:,1].to(int)]}")
-            #print(f"sources_matching_type[value_mask][:,1:]: {sources_matching_type[value_mask][:,1]}")
-            #print(f"sources_matching_type[value_mask][:,1:].repeat(1, previous_t+1): {sources_matching_type[value_mask][:,1].repeat(1, previous_t+1)}, previous_t: {previous_t}")
-            x_d[nodes_matching_type[index_mask], (type_BC_value-1)::NUM_WATER_VARS] = BC_matching_type[index_mask][sources_matching_type[index_mask][:,1].to(int)] # For nodes who have an "index" datasource, use their source value as a lookup into BC to get BC values
-            x_d[nodes_matching_type[value_mask], (type_BC_value-1)::NUM_WATER_VARS] = sources_matching_type[value_mask][:,1:].repeat(1, previous_t + 1) # For nodes who have a "value" datasource, use this value as the BC value (broacasting to all previous timesteps, as this is a non-varying boundary condition)
-            # x_d[nodes_matching_type, (type_BC_value-1)::NUM_WATER_VARS] = BC # Only apply to boundary nodes whose type is type_BC_value
-    else:
-        # Apply same BC to all BC nodes
-        check_type_BC(type_BC, NUM_WATER_VARS)
-        index_mask = source_BC[:,0] == BC_Datasource.INDEX
-        value_mask = source_BC[:,0] == BC_Datasource.VALUE
-        print("BC",BC)
-        print(f"node_BC.shape: {node_BC.shape}")
-        print(f"index_mask: {index_mask}, value_mask: {value_mask}, type_BC: {type_BC}")
-        print(f"BC[index_mask]: {BC[index_mask]}")
-        print(f"source_BC[value_mask][:,1]: {source_BC[value_mask][:,1]}")
-        print(f"source_BC[value_mask][:,1].repeat(1, previous_t + 1): {source_BC[value_mask][:,1].repeat(1, previous_t + 1)}")
-        if index_mask.any():
-            x_d[node_BC[index_mask], (type_BC-1)::NUM_WATER_VARS] = BC[index_mask]
-        if value_mask.any():
-            x_d[node_BC[value_mask], (type_BC-1)::NUM_WATER_VARS] = source_BC[value_mask][:,1].repeat(1, previous_t + 1) # Broadcast source_BC value to all previous timesteps, as this is a non-varying boundary condition
+    assert type_BC.shape == node_BC.shape, f"Expected type_BC to be same shape as node_BC. Expected {node_BC.shape}, got {type_BC.shape}"
+    # Separate boundary nodes by boundary type, and apply to each boundary type in turn
+    for type_BC_value in torch.unique(type_BC):
+        check_type_BC(type_BC_value, NUM_WATER_VARS)
+        nodes_matching_type = node_BC[type_BC == type_BC_value]
+        BC_matching_type = BC[type_BC == type_BC_value]
+        x_d[nodes_matching_type, (type_BC_value-1)::NUM_WATER_VARS] = BC_matching_type
 
     return x_d
 

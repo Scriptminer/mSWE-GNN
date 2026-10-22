@@ -26,8 +26,6 @@ def adapt_batch_training(batch):
     temp = batch.clone()
     temp.node_BC = torch.cat([temp.ptr[i]+temp[i].node_BC for i in range(temp.num_graphs)])
     temp.temporal_res = temp.temporal_res[0]
-    if temp.source_BC.shape[0] == temp.batch_size:
-        temp.source_BC = temp.source_BC[:1] # Ensure source_BC is not replicated, but retain it's (num BC nodes, 2) shape
     temp.previous_t = temp.previous_t[0]
     if 'edge_ptr' in temp.keys():
         update_batch_multiscale(temp)    
@@ -99,7 +97,7 @@ def rollout_test(model, batch):
         #print(f"temp.x[temp.node_BC] before: {temp.x[temp.node_BC]}")
         temp.x[:,-dynamic_vars:] = apply_boundary_condition(temp.x[:,-dynamic_vars:], 
                                                             temp.BC[:,:,time_step], 
-                                                            temp.node_BC, type_BC=temp.type_BC, source_BC=temp.source_BC)
+                                                            temp.node_BC, type_BC=temp.type_BC)
         #print(f"temp.x[temp.node_BC] after: {temp.x[temp.node_BC]}")
         pred = model(temp)
         temp.x = use_prediction(temp.x, pred, model.previous_t)
@@ -145,7 +143,7 @@ class LightningTrainer(L.LightningModule):
             timer = time.time()
             temp.x[:,-self.dynamic_vars:] = apply_boundary_condition(temp.x[:,-self.dynamic_vars:], 
                                                                 temp.BC[:,:,i], temp.node_BC, 
-                                                                type_BC=temp.type_BC, source_BC=temp.source_BC)
+                                                                type_BC=temp.type_BC)
             self.log(f"time_apply_boundary_condition_{i}", time.time() - timer)
             #print(f"temp.x[temp.node_BC] after: {temp.x[temp.node_BC]}")
             # Model prediction
@@ -274,7 +272,6 @@ class ZarrDataset(torch_geometric.data.Dataset):
         else:
             self.dataset_zarrs = [xr.open_dataset(os.path.join(dataset_path, f"{dataset_name}.zarr")) for dataset_name in dataset_names] # Lazy-load all zarr datasets
             #self.dataset_zarrs = [self.load_zarr(os.path.join(dataset_path, f"{dataset_name}.zarr")) for dataset_name in dataset_names] # Load all compressed zarr datasets into memory. Omitted as it doesn't seem to be any faster. 
-
         self.dataset_lengths = [
             ds.WD.shape[1] - (self.previous_t-1) - self.rollout_steps
             for ds in self.dataset_zarrs
@@ -295,9 +292,6 @@ class ZarrDataset(torch_geometric.data.Dataset):
             whole_dataset: if False, return a single temporal sample. If True, return a whole non-temporal dataset.
             clip_length: clips whole dataset to first clip_length time steps. Ignored if whole_dataset=False.
         """
-        print("Attempting simple xarray read")
-        print(f"BC metadata: {xr.open_zarr('~/mSWE-GNN/database/datasets/train/dyce/hydrograph_0002_highflow_hightemporalres.zarr','BC')['BC']}")
-        print(f"BC values: {xr.open_zarr('~/mSWE-GNN/database/datasets/train/dyce/hydrograph_0002_highflow_hightemporalres.zarr','BC')['BC'][0].values}")
         # Find mesh data
         data = copy.copy(self.mesh_common) # A new object is created, whose keys all point to the existing (never changing) underlying self.mesh_common object values. Zarr attributes later added to this new data object do not modify self.mesh_common's attributes.
         scalers = get_scalers([data], copy.copy(self.scalers)) if self._scalers is None else self._scalers
@@ -322,7 +316,6 @@ class ZarrDataset(torch_geometric.data.Dataset):
                 temporal_slice = np.s_[:, internal_idx : internal_idx+n_timesteps] # Extract only the required part of the Zarr file
             #print(f"Getting slice {temporal_slice} for variable {data_var} (whole_dataset={whole_dataset}) of shape {zarr_data[data_var][temporal_slice].shape}")
             data[data_var] = torch.FloatTensor(zarr_data[data_var][temporal_slice].values) # Extract only the required part of the Zarr file
-        
         # Create x, edge_attr, y
         dataset = create_data_attr([data], scalers=scalers, device=self.device, **self.dataset_parameters, **self.selected_node_features, **self.selected_edge_features)[0]
         if whole_dataset:

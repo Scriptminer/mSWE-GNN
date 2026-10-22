@@ -997,6 +997,13 @@ class MultiscaleMesh(Mesh):
     
 
 class BC_Datasource(enum.IntEnum):
+    """Represents the data source for a BC node
+
+    Represents for a single BC node how its time-varying BC should be determined:
+    - INDEX: values are determined by a supplied index into the training data BC
+        array of hydrographs.
+    - VALUE: values are set to the fixed supplied value.
+    """
     INDEX = 0
     VALUE = 1
 
