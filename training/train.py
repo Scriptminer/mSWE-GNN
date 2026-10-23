@@ -136,7 +136,8 @@ class LightningTrainer(L.LightningModule):
     def training_step(self, batch):
         self.log("rollout_steps", torch.tensor(self.rollout_steps, dtype=torch.float32), on_step=False, on_epoch=True)
         for action in self.trainer.profiler.recorded_durations:
-            self.log(action, self.trainer.profiler.recorded_durations[action][-1])
+            if action.startswith("[LightningModule]LightningTrainer."):
+                self.log(action[len("[LightningModule]LightningTrainer."):], self.trainer.profiler.recorded_durations[action][-1])
         timer = time.time()
         temp = adapt_batch_training(batch)
         self.log("time_adapt_batch", time.time() - timer)

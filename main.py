@@ -5,6 +5,7 @@ import torch
 import wandb
 import datetime
 import time
+import sys
 import matplotlib.pyplot as plt
 import lightning as L
 from torch_geometric.data import DataLoader
@@ -234,9 +235,15 @@ def main(config):
     print('Training and testing finished!')
 
 if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print("Please specify config yaml for training.")
+        quit()
+    elif len(sys.argv) > 2:
+        print(f"Expected one .yaml argument, got {len(sys.argv)-1}.")
+        quit()
     wandb.init(mode="offline")
     # Read configuration file with parameters
-    cfg = read_config('config_lisfloodfp_cpu_dyce.yaml')
+    cfg = read_config(sys.argv[1])
     #cfg = read_config('config_dyce.yaml')
     #wandb.init()
     wandb_logger = WandbLogger(
