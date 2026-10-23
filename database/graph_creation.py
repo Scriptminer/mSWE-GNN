@@ -1629,7 +1629,7 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
         attributes = pool_multiscale_attributes(mesh, *attributes, reduce='mean')
         mesh.DEM = update_ghost_cells_attributes(mesh, attributes[0])[0] #correct ghost cells values after pooling
     else:
-        attributes = add_ghost_cells_attributes(mesh.meshes[0], *attributes)
+        attributes = add_ghost_cells_attributes(mesh, *attributes)
         mesh.DEM = attributes[0]
     # slope_x, slope_y = get_slopes(mesh.face_xy, mesh.DEM, neighborhood_size=neighborhood_size_slope, 
     #                                   min_neighbours=min_neighbours_slope)
