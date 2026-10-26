@@ -5,6 +5,7 @@ import torch
 import wandb
 import time
 import matplotlib.pyplot as plt
+import os
 import sys
 import lightning as L
 from torch_geometric.data import DataLoader
@@ -186,7 +187,7 @@ def main(config, checkpoint_path):
     NEW_PREDICTION = True 
     if NEW_PREDICTION:
         predicted_rollout = trainer.predict(plmodule, dataloaders=test_dataloader)
-        with open(f"predictions{time.time()}.pkl", "wb") as f:
+        with open(f"predictions_{checkpoint_path.replace('.ckpt','')}_{time.time()}.pkl", "wb") as f:
             pickle.dump(predicted_rollout, f)
     else:
         with open("predictions1781959069.6740851.pkl", "rb") as f:
@@ -248,7 +249,7 @@ if __name__ == '__main__':
         quit()
     wandb.init(mode="disabled")
     # Read configuration file with parameters
-    cfg = read_config('config_lisfloodfp_cpu_dyce.yaml')
+    cfg = read_config(f'config_{os.path.basename(sys.argv[1]).replace("ckpt","yaml")}')
     #cfg = read_config('config_dyce.yaml')
 
     wandb_logger = WandbLogger(

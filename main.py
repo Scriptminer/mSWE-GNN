@@ -25,7 +25,7 @@ torch.set_float32_matmul_precision('high')
 
 NUM_WORKERS = torch.get_num_threads()
 
-def main(config):
+def main(config, yaml_name):
     L.seed_everything(config.models['seed'])
     
     torch.multiprocessing.set_start_method('forkserver', force=True)
@@ -123,9 +123,9 @@ def main(config):
 
     # Training
     # Define callbacks
-    checkpoint_callback = ModelCheckpoint(dirpath='lightning_logs/models',
+    checkpoint_callback = ModelCheckpoint(dirpath=None,
                                         monitor="val_loss", mode='min',
-                                        save_top_k=-1)
+                                        save_top_k=5, save_last=True)
     curriculum_callback = CurriculumLearning(max_rollout_steps, patience=5)
     early_stopping      = EarlyStopping('val_CSI_005', mode='max', patience=trainer_options['patience'])
     wandb_logger.watch(model, log="all", log_graph=False)
@@ -142,7 +142,7 @@ def main(config):
     ckpt_path = config.get("saved_model",None)
 
     # Define trainer
-    experiment_name = f"dyce_{datetime.datetime.strftime(datetime.datetime.now(),'%Y-%m-%d_%H%M')}"
+    experiment_name = f"dyce_{yaml_name}_{datetime.datetime.strftime(datetime.datetime.now(),'%Y-%m-%d_%H%M')}"
     logger = CSVLogger("logs", name=experiment_name)
     print("Initialising trainer...")
     trainer = L.Trainer(accelerator="auto", devices='auto',
@@ -258,4 +258,4 @@ if __name__ == '__main__':
     print(wandb.config)
     config = wandb.config
     
-    main(config)
+    main(config, yaml_name=sys.argv[1][:-5])
