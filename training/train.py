@@ -141,34 +141,24 @@ class LightningTrainer(L.LightningModule):
             elif action.startswith("[_TrainingEpochLoop].train_dataloader_next"):
                 # Also log train_dataloader_next time
                 self.log(action[len("[_TrainingEpochLoop]."):], self.trainer.profiler.recorded_durations[action][-1])
-        timer = time.time()
         temp = adapt_batch_training(batch)
-        self.log("time_adapt_batch", time.time() - timer)
         roll_loss = []
         #torch.cuda.memory._record_memory_history(max_entries=100000)
         for i in range(self.rollout_steps):
             #print(f"temp.x[temp.node_BC] before: {temp.x[temp.node_BC]}")
-            timer = time.time()
             temp.x[:,-self.dynamic_vars:] = apply_boundary_condition(temp.x[:,-self.dynamic_vars:], 
                                                                 temp.BC[:,:,i], temp.node_BC, 
                                                                 type_BC=temp.type_BC)
-            self.log(f"time_apply_boundary_condition_{i}", time.time() - timer)
             #print(f"temp.x[temp.node_BC] after: {temp.x[temp.node_BC]}")
             # Model prediction
-            timer = time.time()
             preds = self.model(temp)
-            self.log(f"time_model_forward_{i}", time.time() - timer)
             
-            timer = time.time()
-            temp.x = use_prediction(temp.x, preds, self.model.previous_t)
-            self.log(f"time_use_prediction_{i}", time.time() - timer)          
+            temp.x = use_prediction(temp.x, preds, self.model.previous_t)   
             
-            timer = time.time()
             loss = loss_function(preds, temp.y[:,:,i], temp, temp.BC[:,-2:,i+1].mean(1), type_loss=self.type_loss, 
                            only_where_water=self.only_where_water, conservation=self.conservation, 
                            velocity_scaler=self.velocity_scaler)
-            roll_loss.append(loss)
-            self.log(f"time_compute_loss_{i}", time.time() - timer)          
+            roll_loss.append(loss)       
 
         loss = torch.stack(roll_loss).mean()
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
