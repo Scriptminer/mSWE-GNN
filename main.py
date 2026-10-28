@@ -238,12 +238,14 @@ if __name__ == '__main__':
     if len(sys.argv) < 2:
         print("Please specify config yaml for training.")
         quit()
-    elif len(sys.argv) > 2:
-        print(f"Expected one .yaml argument, got {len(sys.argv)-1}.")
+    elif len(sys.argv) > 3:
+        print(f"Expected one .yaml argument, or one .yaml argument and one .ckpt file, got {len(sys.argv)-1}.")
         quit()
     wandb.init(mode="offline")
     # Read configuration file with parameters
     cfg = read_config(sys.argv[1])
+    if len(sys.argv) == 3:
+        cfg["saved_model"] = sys.argv[2]
     #cfg = read_config('config_dyce.yaml')
     #wandb.init()
     wandb_logger = WandbLogger(
