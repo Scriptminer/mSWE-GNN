@@ -371,8 +371,8 @@ class DataModule(L.LightningDataModule):
         self.val_dataloader_params = val_dataloader_params
         self.save_hyperparameters(
             {
-                "train_dataset_mesh": [self.temporal_train_dataset.mesh_common_filename, self.temporal_train_dataset.mesh_common],
-                "val_dataset_mesh": [self.temporal_val_dataset.mesh_common_filename, self.temporal_val_dataset.mesh_common],
+                "train_dataset_mesh": [self.temporal_train_dataset.mesh_common_filename, str(self.temporal_train_dataset.mesh_common)],
+                "val_dataset_mesh": [self.temporal_val_dataset.mesh_common_filename, str(self.temporal_val_dataset.mesh_common)],
                 "train_dataset_lengths": {name: self.temporal_train_dataset.dataset_lengths[i] for i, name in enumerate(self.temporal_train_dataset.dataset_names)},
                 "val_dataset_lengths": {name: self.temporal_val_dataset.dataset_lengths[i] for i, name in enumerate(self.temporal_val_dataset.dataset_names)}
             },
