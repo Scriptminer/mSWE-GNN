@@ -142,7 +142,7 @@ def main(config, yaml_name):
     ckpt_path = config.get("saved_model",None)
 
     # Define trainer
-    experiment_name = f"dyce_{yaml_name}_{datetime.datetime.strftime(datetime.datetime.now(),'%Y-%m-%d_%H%M')}"
+    experiment_name = f"{yaml_name.removeprefix('config_')}_{datetime.datetime.strftime(datetime.datetime.now(),'%Y-%m-%d_%H%M')}"
     logger = CSVLogger("logs", name=experiment_name)
     print("Initialising trainer...")
     trainer = L.Trainer(accelerator="auto", devices='auto',

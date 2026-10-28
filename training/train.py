@@ -93,7 +93,6 @@ def rollout_test(model, batch):
     predicted_rollout = []
 
     for time_step in range(final_step):
-        print(f"Predicting step {time_step+1}/{final_step}")
         #print(f"temp.x[temp.node_BC] before: {temp.x[temp.node_BC]}")
         temp.x[:,-dynamic_vars:] = apply_boundary_condition(temp.x[:,-dynamic_vars:], 
                                                             temp.BC[:,:,time_step], 
@@ -136,8 +135,12 @@ class LightningTrainer(L.LightningModule):
     def training_step(self, batch):
         self.log("rollout_steps", torch.tensor(self.rollout_steps, dtype=torch.float32), on_step=False, on_epoch=True)
         for action in self.trainer.profiler.recorded_durations:
-            if action.startswith("[LightningModule]LightningTrainer."):
+            if action.startswith("[LightningModule]LightningTrainer.") and len(self.trainer.profiler.recorded_durations[action]) >= self.trainer.global_step:
+                # Only log those trainer actions which are recorded every step
                 self.log(action[len("[LightningModule]LightningTrainer."):], self.trainer.profiler.recorded_durations[action][-1])
+            elif action.startswith("[_TrainingEpochLoop].train_dataloader_next"):
+                # Also log train_dataloader_next time
+                self.log(action[len("[_TrainingEpochLoop]."):], self.trainer.profiler.recorded_durations[action][-1])
         timer = time.time()
         temp = adapt_batch_training(batch)
         self.log("time_adapt_batch", time.time() - timer)
@@ -233,7 +236,7 @@ class ZarrDataset(torch_geometric.data.Dataset):
         self.selected_node_features = selected_node_features
         self.selected_edge_features = selected_edge_features
         self.scalers = scalers
-
+        
         with open(mesh_common_file, "rb") as f:
             self.mesh_common = pickle.load(f)
         face_coords = xr.DataArray(self.mesh_common.mesh.face_xy, dims=("nFaces","coord"), coords={"nFaces":np.arange(len(self.mesh_common.mesh.face_xy))}) 
@@ -241,6 +244,7 @@ class ZarrDataset(torch_geometric.data.Dataset):
         self.device = device
         self.sequential_access = sequential_access
         self.dataset_names = dataset_names
+        self.mesh_common_filename = mesh_common_file
 
         if reproject_zarrs:
             self.dataset_zarrs = []
@@ -377,6 +381,8 @@ class DataModule(L.LightningDataModule):
         self.val_dataloader_params = val_dataloader_params
         self.save_hyperparameters(
             {
+                "train_dataset_mesh": [self.temporal_train_dataset.mesh_common_filename, self.temporal_train_dataset.mesh_common],
+                "val_dataset_mesh": [self.temporal_val_dataset.mesh_common_filename, self.temporal_val_dataset.mesh_common],
                 "train_dataset_lengths": {name: self.temporal_train_dataset.dataset_lengths[i] for i, name in enumerate(self.temporal_train_dataset.dataset_names)},
                 "val_dataset_lengths": {name: self.temporal_val_dataset.dataset_lengths[i] for i, name in enumerate(self.temporal_val_dataset.dataset_names)}
             },
