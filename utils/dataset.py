@@ -512,13 +512,16 @@ def apply_boundary_condition(x_d, BC, node_BC, type_BC=2):
         ndarray of 1 or 2: Array specifying type_BC for each node_BC individually
     '''
     assert type_BC.shape == node_BC.shape, f"Expected type_BC to be same shape as node_BC. Expected {node_BC.shape}, got {type_BC.shape}"
+    volume_diff = torch.zeros_like(node_BC)
     # Separate boundary nodes by boundary type, and apply to each boundary type in turn
     for type_BC_value in torch.unique(type_BC):
         check_type_BC(type_BC_value, NUM_WATER_VARS)
         nodes_matching_type = node_BC[type_BC == type_BC_value]
         BC_matching_type = BC[type_BC == type_BC_value]
+        volume_multiplier = 1 if type_BC_value == 1 else 1
+        volume_diff[type_BC == type_BC_value] = (BC_matching_type - x_d[nodes_matching_type, (type_BC_value-1)::NUM_WATER_VARS]) * volume_multiplier
         x_d[nodes_matching_type, (type_BC_value-1)::NUM_WATER_VARS] = BC_matching_type
-
+    print(f"type_BC: {type_BC}, BC: {BC}, volume_diff: {volume_diff}")    
     return x_d
 
 def check_type_BC(type_BC, num_water_vars):

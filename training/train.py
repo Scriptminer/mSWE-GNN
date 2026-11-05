@@ -94,6 +94,7 @@ def rollout_test(model, batch):
 
     for time_step in range(final_step):
         #print(f"temp.x[temp.node_BC] before: {temp.x[temp.node_BC]}")
+        print(f"edge_BC_length: {temp.edge_BC_length}, temporal_res: {temp.temporal_res}")
         temp.x[:,-dynamic_vars:] = apply_boundary_condition(temp.x[:,-dynamic_vars:], 
                                                             temp.BC[:,:,time_step], 
                                                             temp.node_BC, type_BC=temp.type_BC)
