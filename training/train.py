@@ -127,12 +127,14 @@ class LightningTrainer(L.LightningModule):
         self.conservation = trainer_options['conservation']
         self.velocity_scaler = trainer_options['velocity_scaler']
         self.type_loss = trainer_options['type_loss']
+        self.rollout_loss = trainer_options.get('rollout_loss', True)
         self.temporal_test_dataset_parameters = temporal_test_dataset_parameters
         self.rollout_steps = 1
         assert self.type_loss in ['RMSE','MAE'], "loss_type must be either 'RMSE' or 'MAE'"        
         self.curriculum_epoch = trainer_options['curriculum_epoch']
         self.save_hyperparameters()
-        
+        print("ROLLOUT LOSS", self.rollout_loss)
+
     def training_step(self, batch):
         self.log("rollout_steps", torch.tensor(self.rollout_steps, dtype=torch.float32), on_step=False, on_epoch=True)
         for action in self.trainer.profiler.recorded_durations:
@@ -156,10 +158,12 @@ class LightningTrainer(L.LightningModule):
             
             temp.x = use_prediction(temp.x, preds, self.model.previous_t)   
             
-            loss = loss_function(preds, temp.y[:,:,i], temp, temp.BC[:,-2:,i+1].mean(1), type_loss=self.type_loss, 
+            if self.rollout_loss or i == (self.rollout_steps-1):
+                # Count loss for all steps if rollout_loss is True, otherwise just for final step
+                loss = loss_function(preds, temp.y[:,:,i], temp, temp.BC[:,-2:,i+1].mean(1), type_loss=self.type_loss, 
                            only_where_water=self.only_where_water, conservation=self.conservation, 
                            velocity_scaler=self.velocity_scaler)
-            roll_loss.append(loss)       
+                roll_loss.append(loss)       
 
         loss = torch.stack(roll_loss).mean()
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
