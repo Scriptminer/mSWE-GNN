@@ -121,7 +121,7 @@ def loss_function(preds, real, data, BC, type_loss='RMSE', only_where_water=Fals
         pred_WD = preds[:,0::WD_index] #[m] (only water depth)
         if theoretical_volume_delta is not None:
             # Use supplied theoretical_volume_delta to calculate conservation loss
-            conservation_loss = full_conservation_loss(pred_WD, input_WD, data, theoretical_volume_delta, log_fn).abs()
+            conservation_loss = full_conservation_loss(pred_WD, input_WD, data, theoretical_volume_delta, log_fn, sample_loss=True).abs()
         else:
             # No theoretical volume delta specified, assume model has no outflows and use regular conservation loss.
             conservation_loss = conservation_loss(pred_WD, input_WD, data, BC).abs()
@@ -154,7 +154,7 @@ def conservation_loss(pred_WD, input_WD, data, BC):
     theoretical_volume_delta = get_inflow_volume(data, BC) #[m^3]
     return full_conservation_loss(pred_WD, input_WD, data, theoretical_volume_delta)
 
-def full_conservation_loss(pred_WD, input_WD, data, theoretical_volume_delta, log_fn): #TODO this function doesn't require the log function
+def full_conservation_loss(pred_WD, input_WD, data, theoretical_volume_delta, log_fn, sample_loss=False): #TODO this function doesn't require the log function
     '''
     Calculates loss for mass conservation, calculated as the difference between 
     the predicted volume change (sum(area*(pred_WD - input_WD))) and 
@@ -176,6 +176,7 @@ def full_conservation_loss(pred_WD, input_WD, data, theoretical_volume_delta, lo
     assert pred_WD.shape == input_WD.shape, f"Input or predictions have wrong dimensions ({pred_WD.shape} != {input_WD.shape})"
     delta_WD = pred_WD - input_WD #[m]
     assert delta_WD.dim() == 2, f"Input or predictions have wrong dimensions ({delta_WD.dim()})"
+    sample_size = len(delta_WD) // data.num_graphs
 
     # Calculate predicted volume
     area = data.area if data.area.dim() ==2 else data.area.unsqueeze(1) #[m^2]
@@ -183,23 +184,40 @@ def full_conservation_loss(pred_WD, input_WD, data, theoretical_volume_delta, lo
     # Multiscale (select only the finest scale)
     if 'node_ptr' in data.keys():
         if isinstance(data, Batch):
-            predicted_volume_delta = torch.cat([(area*delta_WD)[data.node_ptr[i,0]:data.node_ptr[i,1]] 
-                                                 for i in range(data.num_graphs)]).sum() #[m^3]
+            sample_predicted_volume_delta = torch.cat([(area*delta_WD)[data.node_ptr[i,0]:data.node_ptr[i,1]] 
+                                                for i in range(data.num_graphs)]) #[m^3]
+            if sample_loss:
+                predicted_volume_delta = sample_predicted_volume_delta
+            else:
+                predicted_volume_delta = sample_predicted_volume_delta.sum()
         else:
             predicted_volume_delta = ((area*delta_WD)[data.node_ptr[0]:data.node_ptr[1]]).sum()
 
     # Single scale
-    else: 
-        predicted_volume_delta = (area*delta_WD).sum() #[m^3]
+    else:
+        if isinstance(data, Batch) and sample_loss:
+            predicted_volume_delta = torch.cat([(area*delta_WD)[i*sample_size : (i+1)*sample_size].sum()
+                                                for i in range(data.num_graphs)]) #[m^3]
+        else:
+            predicted_volume_delta = (area*delta_WD).sum() #[m^3]
     
     # Theoretical inflow volume
-    boundary_correction = ((area*delta_WD)[data.node_BC]).sum() #[m^3] # remove values at ghost cells
+    if isinstance(data, Batch) and sample_loss:
+        BC_sample_size = len(data.node_BC) // data.num_graphs
+        boundary_correction = torch.cat([(area*delta_WD)[data.node_BC][i*BC_sample_size : (i+1)*BC_sample_size].sum()
+                                                for i in range(data.num_graphs)]) #[m^3]
+        boundary_correction = ((area*delta_WD)[data.node_BC])
+    else:
+        boundary_correction = ((area*delta_WD)[data.node_BC]).sum() #[m^3] # remove values at ghost cells
     
     log_fn("pred_volume_delta", predicted_volume_delta - boundary_correction, on_step=True)
     # Mass conservation 
     conservation_loss = (predicted_volume_delta - theoretical_volume_delta - boundary_correction)/1e6 #[m^3 * 1e6]
 
     if isinstance(data, Batch):
-        conservation_loss = conservation_loss/data.num_graphs
+        if sample_loss:
+            conservation_loss = conservation_loss.abs().mean()
+        else:
+            conservation_loss = conservation_loss/data.num_graphs
     
     return conservation_loss

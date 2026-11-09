@@ -153,17 +153,20 @@ class LightningTrainer(L.LightningModule):
         #torch.cuda.memory._record_memory_history(max_entries=100000)
         for i in range(self.rollout_steps):
             #print(f"temp.x[temp.node_BC] before: {temp.x[temp.node_BC]}")
-            volume_diff = torch.zeros_like(temp.node_BC, dtype=temp.x.dtype)
+            node_volume_deltas = torch.zeros_like(temp.node_BC, dtype=temp.x.dtype)
             temp.x[:,-self.dynamic_vars:] = apply_boundary_condition(temp.x[:,-self.dynamic_vars:], 
                                                                 temp.BC[:,:,i], temp.node_BC, 
                                                                 type_BC=temp.type_BC,
-                                                                volume_diff=volume_diff,
+                                                                volume_diff=node_volume_deltas,
                                                                 face_BC_area=temp.area[temp.node_BC],
                                                                 temporal_res_seconds=10)
             #print(f"temp.x[temp.node_BC] after: {temp.x[temp.node_BC]}")
-            true_inflow, true_outflow = torch.maximum(volume_diff,torch.tensor(0)).sum(), torch.minimum(volume_diff,torch.tensor(0)).sum()
-            self.log("inflow", true_inflow, on_step=True)
-            self.log("outflow", true_outflow, on_step=True)
+            volume_deltas = torch.zeros(self.batch_size, dtype=temp.x.dtype)
+            for i, sample_volume_deltas in enumerate(torch.split(node_volume_deltas, self.batch_size)):
+                true_inflow, true_outflow = torch.maximum(sample_volume_deltas,torch.tensor(0)).sum(), torch.minimum(sample_volume_deltas,torch.tensor(0)).sum()
+                self.log(f"inflow_{i}", true_inflow, on_step=True)
+                self.log(f"outflow_{i}", true_outflow, on_step=True)
+                volume_deltas[i] = true_inflow+true_outflow
             # Model prediction
             preds = self.model(temp)
             
@@ -173,7 +176,7 @@ class LightningTrainer(L.LightningModule):
                 # Count loss for all steps if rollout_loss is True, otherwise just for final step
                 loss = loss_function(preds, temp.y[:,:,i], temp, temp.BC[:,-2:,i+1].mean(1), type_loss=self.type_loss, 
                            only_where_water=self.only_where_water, conservation=self.conservation, 
-                           velocity_scaler=self.velocity_scaler, theoretical_volume_delta=true_inflow+true_outflow, log_fn=self.log)
+                           velocity_scaler=self.velocity_scaler, theoretical_volume_delta=volume_deltas, log_fn=self.log)
                 roll_loss.append(loss)       
 
         loss = torch.stack(roll_loss).mean()
