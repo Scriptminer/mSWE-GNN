@@ -161,10 +161,9 @@ class LightningTrainer(L.LightningModule):
                                                                 face_BC_area=temp.area[temp.node_BC],
                                                                 temporal_res_seconds=10)
             #print(f"temp.x[temp.node_BC] after: {temp.x[temp.node_BC]}")
-            inflow, outflow = torch.maximum(volume_diff,0).sum(), torch.minimum(volume_diff,0).sum()
-            self.log("inflow", inflow, on_step=True)
-            self.log("outflow", outflow, on_step=True)
-            true_mass_diff = inflow + outflow
+            true_inflow, true_outflow = torch.maximum(volume_diff,0).sum(), torch.minimum(volume_diff,0).sum()
+            self.log("inflow", true_inflow, on_step=True)
+            self.log("outflow", true_outflow, on_step=True)
             # Model prediction
             preds = self.model(temp)
             
@@ -174,7 +173,7 @@ class LightningTrainer(L.LightningModule):
                 # Count loss for all steps if rollout_loss is True, otherwise just for final step
                 loss = loss_function(preds, temp.y[:,:,i], temp, temp.BC[:,-2:,i+1].mean(1), type_loss=self.type_loss, 
                            only_where_water=self.only_where_water, conservation=self.conservation, 
-                           velocity_scaler=self.velocity_scaler)
+                           velocity_scaler=self.velocity_scaler, theoretical_volume_delta=true_inflow+true_outflow, log_fn=self.log)
                 roll_loss.append(loss)       
 
         loss = torch.stack(roll_loss).mean()
