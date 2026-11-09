@@ -292,8 +292,9 @@ def create_data_attr(datasets, scalers=None, temporal_res=60, original_temporal_
             temp.BC[value_mask] = torch.tile(source_BC[value_mask][:,1], (n_timesteps, 1)).T # For nodes which have a "value" datasource, use this value as the BC value (with this value repeated for all previous timesteps, as this is a non-varying boundary condition)
             
             temp.edge_BC_length = data.edge_BC_length.to(device)
-            temp.BC = temp.BC.to(device)/torch.unsqueeze(temp.edge_BC_length, 0).T # Each BC has its own length associated with it, unsqueeze and transpose to scale BC values by the correct edge length
-        
+            temp.BC[temp.type_BC == 2] = (temp.BC/torch.unsqueeze(temp.edge_BC_length, 0).T)[temp.type_BC == 2] # Each BC has its own length associated with it, unsqueeze and transpose to scale discharge BC values by the correct edge length
+            TEMPORAL_RESOLUTION_SECONDS = 10
+            temp.BC[temp.type_BC == 2] *= TEMPORAL_RESOLUTION_SECONDS
         if 'mesh' in data.keys():
             temp.mesh = data.mesh
             if isinstance(temp.mesh, MultiscaleMesh):
@@ -503,7 +504,7 @@ def get_edge_BC(node_BC, edge_index):
     edge_BC = torch.cat([torch.where(node == edge_index)[1] for node in node_BC])
     return edge_BC
 
-def apply_boundary_condition(x_d, BC, node_BC, type_BC=2):
+def apply_boundary_condition(x_d, BC, node_BC, type_BC=2, volume_diff=None, face_BC_area=None, temporal_res_seconds=None):
     '''
     Apply inflow boundary condition BC to nodes node_BC
     type_BC:
@@ -512,16 +513,19 @@ def apply_boundary_condition(x_d, BC, node_BC, type_BC=2):
         ndarray of 1 or 2: Array specifying type_BC for each node_BC individually
     '''
     assert type_BC.shape == node_BC.shape, f"Expected type_BC to be same shape as node_BC. Expected {node_BC.shape}, got {type_BC.shape}"
-    volume_diff = torch.zeros_like(node_BC)
     # Separate boundary nodes by boundary type, and apply to each boundary type in turn
     for type_BC_value in torch.unique(type_BC):
         check_type_BC(type_BC_value, NUM_WATER_VARS)
         nodes_matching_type = node_BC[type_BC == type_BC_value]
         BC_matching_type = BC[type_BC == type_BC_value]
-        volume_multiplier = 1 if type_BC_value == 1 else 1
-        volume_diff[type_BC == type_BC_value] = (BC_matching_type - x_d[nodes_matching_type, (type_BC_value-1)::NUM_WATER_VARS]) * volume_multiplier
+        if volume_diff is not None:
+            volume_multiplier = face_BC_area[type_BC == type_BC_value] / temporal_res_seconds if type_BC_value == 1 else 1 # Depths are multiplied by cell area, and divided by the number of seconds over which that depth is adjusted to the BC depth value, to give discharge
+            volume_diff[type_BC == type_BC_value] = (BC_matching_type - x_d[nodes_matching_type, (type_BC_value-1)::NUM_WATER_VARS])[:,-1] * volume_multiplier
+            #if type_BC_value == 1 and torch.abs(volume_diff).max() > 0:
+            #    print(f"BC: {BC[:10]}, x_d: {x_d[node_BC[:10]]}, volume_diff: {volume_diff[:10]}")
         x_d[nodes_matching_type, (type_BC_value-1)::NUM_WATER_VARS] = BC_matching_type
-    print(f"type_BC: {type_BC}, BC: {BC}, volume_diff: {volume_diff}")    
+    #print(f"type_BC: {type_BC[:10]}, BC: {BC[:10]}, x_d: {x_d[node_BC[:10]]}, volume_diff: {volume_diff[:10]}")    
+    #print(volume_diff[:10])
     return x_d
 
 def check_type_BC(type_BC, num_water_vars):

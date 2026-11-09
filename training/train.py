@@ -94,11 +94,16 @@ def rollout_test(model, batch):
 
     for time_step in range(final_step):
         #print(f"temp.x[temp.node_BC] before: {temp.x[temp.node_BC]}")
-        print(f"edge_BC_length: {temp.edge_BC_length}, temporal_res: {temp.temporal_res}")
+        volume_diff = torch.zeros_like(temp.node_BC, dtype=temp.x.dtype)
+        #print(f"temp.area.shape: {temp.area.shape}, BCarea: {temp.area[temp.node_BC]}")
         temp.x[:,-dynamic_vars:] = apply_boundary_condition(temp.x[:,-dynamic_vars:], 
                                                             temp.BC[:,:,time_step], 
-                                                            temp.node_BC, type_BC=temp.type_BC)
+                                                            temp.node_BC, type_BC=temp.type_BC,
+                                                            volume_diff=volume_diff,
+                                                            face_BC_area=temp.area[temp.node_BC],
+                                                            temporal_res_seconds=10)
         #print(f"temp.x[temp.node_BC] after: {temp.x[temp.node_BC]}")
+        #print(time_step, volume_diff)
         pred = model(temp)
         temp.x = use_prediction(temp.x, pred, model.previous_t)
         predicted_rollout.append(pred)
@@ -133,7 +138,6 @@ class LightningTrainer(L.LightningModule):
         assert self.type_loss in ['RMSE','MAE'], "loss_type must be either 'RMSE' or 'MAE'"        
         self.curriculum_epoch = trainer_options['curriculum_epoch']
         self.save_hyperparameters()
-        print("ROLLOUT LOSS", self.rollout_loss)
 
     def training_step(self, batch):
         self.log("rollout_steps", torch.tensor(self.rollout_steps, dtype=torch.float32), on_step=False, on_epoch=True)
@@ -149,10 +153,18 @@ class LightningTrainer(L.LightningModule):
         #torch.cuda.memory._record_memory_history(max_entries=100000)
         for i in range(self.rollout_steps):
             #print(f"temp.x[temp.node_BC] before: {temp.x[temp.node_BC]}")
+            volume_diff = torch.zeros_like(temp.node_BC, dtype=temp.x.dtype)
             temp.x[:,-self.dynamic_vars:] = apply_boundary_condition(temp.x[:,-self.dynamic_vars:], 
                                                                 temp.BC[:,:,i], temp.node_BC, 
-                                                                type_BC=temp.type_BC)
+                                                                type_BC=temp.type_BC,
+                                                                volume_diff=volume_diff,
+                                                                face_BC_area=temp.area[temp.node_BC],
+                                                                temporal_res_seconds=10)
             #print(f"temp.x[temp.node_BC] after: {temp.x[temp.node_BC]}")
+            inflow, outflow = torch.maximum(volume_diff,0).sum(), torch.minimum(volume_diff,0).sum()
+            self.log("inflow", inflow, on_step=True)
+            self.log("outflow", outflow, on_step=True)
+            true_mass_diff = inflow + outflow
             # Model prediction
             preds = self.model(temp)
             
