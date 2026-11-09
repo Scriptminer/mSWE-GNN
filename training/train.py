@@ -161,7 +161,7 @@ class LightningTrainer(L.LightningModule):
                                                                 face_BC_area=temp.area[temp.node_BC],
                                                                 temporal_res_seconds=10)
             #print(f"temp.x[temp.node_BC] after: {temp.x[temp.node_BC]}")
-            true_inflow, true_outflow = torch.maximum(volume_diff,0).sum(), torch.minimum(volume_diff,0).sum()
+            true_inflow, true_outflow = torch.maximum(volume_diff,torch.tensor(0)).sum(), torch.minimum(volume_diff,torch.tensor(0)).sum()
             self.log("inflow", true_inflow, on_step=True)
             self.log("outflow", true_outflow, on_step=True)
             # Model prediction

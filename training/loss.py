@@ -121,12 +121,12 @@ def loss_function(preds, real, data, BC, type_loss='RMSE', only_where_water=Fals
         pred_WD = preds[:,0::WD_index] #[m] (only water depth)
         if theoretical_volume_delta is not None:
             # Use supplied theoretical_volume_delta to calculate conservation loss
-            conservation_loss = full_conservation_loss(pred_WD, input_WD, data, theoretical_volume_delta).abs()
+            conservation_loss = full_conservation_loss(pred_WD, input_WD, data, theoretical_volume_delta, log_fn).abs()
         else:
             # No theoretical volume delta specified, assume model has no outflows and use regular conservation loss.
             conservation_loss = conservation_loss(pred_WD, input_WD, data, BC).abs()
         if log_fn:
-            log_fn("conservation_loss", conservation_loss)
+            log_fn("conservation_loss", conservation_loss, on_step=True)
         loss = loss + conservation*conservation_loss
 
     return loss
@@ -154,7 +154,7 @@ def conservation_loss(pred_WD, input_WD, data, BC):
     theoretical_volume_delta = get_inflow_volume(data, BC) #[m^3]
     return full_conservation_loss(pred_WD, input_WD, data, theoretical_volume_delta)
 
-def full_conservation_loss(pred_WD, input_WD, data, theoretical_volume_delta):
+def full_conservation_loss(pred_WD, input_WD, data, theoretical_volume_delta, log_fn): #TODO this function doesn't require the log function
     '''
     Calculates loss for mass conservation, calculated as the difference between 
     the predicted volume change (sum(area*(pred_WD - input_WD))) and 
@@ -194,7 +194,8 @@ def full_conservation_loss(pred_WD, input_WD, data, theoretical_volume_delta):
     
     # Theoretical inflow volume
     boundary_correction = ((area*delta_WD)[data.node_BC]).sum() #[m^3] # remove values at ghost cells
-        
+    
+    log_fn("pred_volume_delta", predicted_volume_delta - boundary_correction, on_step=True)
     # Mass conservation 
     conservation_loss = (predicted_volume_delta - theoretical_volume_delta - boundary_correction)/1e6 #[m^3 * 1e6]
 
