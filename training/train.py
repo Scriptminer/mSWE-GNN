@@ -162,10 +162,10 @@ class LightningTrainer(L.LightningModule):
                                                                 temporal_res_seconds=10)
             #print(f"temp.x[temp.node_BC] after: {temp.x[temp.node_BC]}")
             volume_deltas = torch.zeros(self.batch_size, dtype=temp.x.dtype)
-            for i, sample_volume_deltas in enumerate(torch.split(node_volume_deltas, self.batch_size)):
+            for i, sample_volume_deltas in enumerate(torch.split(node_volume_deltas, len(node_volume_deltas) // self.batch_size)):
                 true_inflow, true_outflow = torch.maximum(sample_volume_deltas,torch.tensor(0)).sum(), torch.minimum(sample_volume_deltas,torch.tensor(0)).sum()
-                self.log(f"inflow_{i}", true_inflow, on_step=True)
-                self.log(f"outflow_{i}", true_outflow, on_step=True)
+                self.log(f"true_inflow_{i}", true_inflow, on_step=True)
+                self.log(f"true_outflow_{i}", true_outflow, on_step=True)
                 volume_deltas[i] = true_inflow+true_outflow
             # Model prediction
             preds = self.model(temp)
