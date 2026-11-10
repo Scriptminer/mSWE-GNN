@@ -187,8 +187,11 @@ def main(config, checkpoint_path):
     NEW_PREDICTION = True 
     if NEW_PREDICTION:
         predicted_rollout = trainer.predict(plmodule, dataloaders=test_dataloader)
-        with open(f"predictions_{checkpoint_path.replace('.ckpt','')}_{time.time()}.pkl", "wb") as f:
+        title = f"predictions_{os.path.basename(checkpoint_path).replace('.ckpt','')}_{time.time()}"
+        with open(f"{title}.pkl", "wb") as f:
             pickle.dump(predicted_rollout, f)
+        with open(f"{title}.json", "w") as f:
+            json.dump({"inference_config": config, "checkpoint": checkpoint_path}, f)
     else:
         with open("predictions1781959069.6740851.pkl", "rb") as f:
             predicted_rollout = pickle.load(f)
@@ -244,18 +247,19 @@ if __name__ == '__main__':
     if len(sys.argv) < 2:
         print("Please specify .ckpt model to test!")
         quit()
-    elif len(sys.argv) > 2:
-        print(f"Expected one .ckpt model argument, got {len(sys.argv)-1}.")
+    elif len(sys.argv) > 3:
+        print(f"Expected one .ckpt model argument (and corresponding yaml file present), or one .ckpt model argument and .yaml explicitly specified, got {len(sys.argv)-1}.")
         quit()
     wandb.init(mode="disabled")
     # Read configuration file with parameters
-    cfg = read_config(f'config_{os.path.basename(sys.argv[1]).replace("ckpt","yaml")}')
+    cfg = read_config(f'config_{os.path.basename(sys.argv[1]).replace("ckpt","yaml")}' if len(sys.argv) == 2 else sys.argv[2])
     #cfg = read_config('config_dyce.yaml')
 
     wandb_logger = WandbLogger(
         log_model=True,
         # mode='disabled',
-        config=cfg)
+        config=cfg
+        )
     wandb.config.update(cfg)
     fix_dict_in_config(wandb)
     

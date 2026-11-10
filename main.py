@@ -23,9 +23,9 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision('high')
 
-NUM_WORKERS = torch.get_num_threads()
+NUM_WORKERS = 10 # torch.get_num_threads()
 
-def main(config, yaml_name):
+def main(config, yaml_name=None):
     L.seed_everything(config.models['seed'])
     
     torch.multiprocessing.set_start_method('forkserver', force=True)
@@ -144,7 +144,7 @@ def main(config, yaml_name):
     # Define trainer
     experiment_name = f"{yaml_name.removeprefix('config_')}_{datetime.datetime.strftime(datetime.datetime.now(),'%Y-%m-%d_%H%M')}"
     logger = CSVLogger("logs", name=experiment_name)
-    print("Initialising trainer...")
+    print(f"Initialising trainer (max_epochs: {trainer_options['max_epochs']}...")
     trainer = L.Trainer(accelerator="auto", devices='auto',
                         max_epochs=trainer_options['max_epochs'],
                         gradient_clip_val=1, # Bentivoglio et al., 2026 has "2", 2025 has "1"
@@ -152,9 +152,10 @@ def main(config, yaml_name):
                         log_every_n_steps=1,
                         profiler="simple",
                         check_val_every_n_epoch=1,
-                        enable_progress_bar=True,
+                        #enable_progress_bar=True,
                         detect_anomaly=False, # Was True
                         logger=logger,
+                        enable_model_summary=False,num_sanity_val_steps=0,
                         callbacks=[checkpoint_callback, 
                                 curriculum_callback, 
                                 early_stopping,
@@ -162,7 +163,7 @@ def main(config, yaml_name):
                                 ])
     
     # Train and get trained model
-    print("Beginning model fit...")
+    print(f"Beginning model fit (checkpoint path: {ckpt_path}...")
     trainer.fit(plmodule, pldatamodule, ckpt_path=ckpt_path, weights_only=False)
     print("Model fit done.")
     wandb_logger.experiment.unwatch(model)
