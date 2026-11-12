@@ -176,7 +176,7 @@ class LightningTrainer(L.LightningModule):
                 # Count loss for all steps if rollout_loss is True, otherwise just for final step
                 loss = loss_function(preds, temp.y[:,:,i], temp, temp.BC[:,-2:,i+1].mean(1), type_loss=self.type_loss, 
                            only_where_water=self.only_where_water, conservation=self.conservation, 
-                           velocity_scaler=self.velocity_scaler, theoretical_volume_delta=volume_deltas, log_fn=self.log)
+                           velocity_scaler=self.velocity_scaler, volume_delta=volume_deltas, log_fn=self.log)
                 roll_loss.append(loss)       
 
         loss = torch.stack(roll_loss).mean()
