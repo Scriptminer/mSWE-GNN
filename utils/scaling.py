@@ -10,7 +10,8 @@ def get_none_scalers():
                     'edge_length_scaler': None,
                     'edge_slope_scaler' : None, 
                     'WD_scaler'         : None,  
-                    'V_scaler'          : None}
+                    'V_scaler'          : None,
+                    'mannings_n_scaler' : None}
     return none_scalers
 
 def stack_attributes(dataset, attribute, inverse=False, to_min=False):
@@ -123,6 +124,7 @@ def get_scalers(dataset, scalers: dict):
         scalers = get_none_scalers()
 
     scalers['DEM_scaler'] = scaler(dataset, 'DEM', type_scaler=scalers['DEM_scaler'], to_min=True)
+    scalers['mannings_n_scaler'] = scaler(dataset, 'mannings_n', type_scaler=scalers['mannings_n_scaler'], to_min=False) # to_min False as minimum Manning's N value should not be scaled to 0.
     scalers['WD_scaler'] = scaler(dataset, 'WD', type_scaler=scalers['WD_scaler'])
     scalers['slope_scaler'] = scaler(dataset, ['slopex', 'slopey'], type_scaler=scalers['slope_scaler'])
 

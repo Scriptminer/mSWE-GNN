@@ -72,7 +72,7 @@ def get_temporal_res(matrix, temporal_res=60, original_temporal_res=60):
     return matrix[:, selected_times]
 
 def get_node_features(data, scalers=None, slopes=False, slope=False, 
-                      area=False, DEM=False, device='cpu'):
+                      area=False, DEM=False, mannings_n=False, device='cpu'):
     '''Return the static node features
 
     data: torch_geometric.data.data.Data
@@ -95,6 +95,7 @@ def get_node_features(data, scalers=None, slopes=False, slope=False,
             'DEM_scaler'  : None, 
             'slope_scaler': None,
             'area_scaler' : None,
+            'mannings_n_scaler' : None,
         }
     
 
@@ -118,6 +119,10 @@ def get_node_features(data, scalers=None, slopes=False, slope=False,
     # digital elevation model (DEM)
     if DEM:
         node_features['DEM'] = process_attr(data.DEM, scaler=scalers['DEM_scaler'], to_min=True, device=device)
+
+    # Manning's N (surface roughness)
+    if mannings_n:
+        node_features["mannings_n"] = process_attr(data.mannings_n, scaler=scalers['mannings_n_scaler'], to_min=False, device=device) # to_min False as minimum Manning's N value should not be scaled to 0.
 
     selected_node_features = locals()
 
@@ -253,7 +258,7 @@ def create_data_attr(datasets, scalers=None, temporal_res=60, original_temporal_
     new_dataset = []
     selected_node_features = {
         key:selected_features[key] for key in 
-        ['slopes', 'slope', 'area', 'DEM']}
+        ['slopes', 'slope', 'area', 'DEM', 'mannings_n']}
 
     selected_edge_features = {
         key:selected_features[key] for key in 
@@ -265,6 +270,7 @@ def create_data_attr(datasets, scalers=None, temporal_res=60, original_temporal_
         temp.edge_attr = get_edge_features(data, scalers=scalers, **selected_edge_features, device=device)
         temp.x = get_node_features(data, **selected_node_features, scalers=scalers, device=device)
         temp.DEM = data.DEM
+        temp.mannings_n = data.mesh.mannings_n
         temp.temporal_res = temporal_res
         temp.area = data.area.to(device)
         if 'BC' in data.keys():

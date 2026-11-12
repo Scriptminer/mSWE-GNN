@@ -860,6 +860,21 @@ class Mesh(object):
             print(f"Could not find the DEM file {DEM_file}. Setting DEM to zeros.")
             self.DEM = np.zeros_like(self.face_area)
 
+    def _import_mannings_n(self, mannings_n_file=None):
+        """Import Mannings n file and interpolate it on the mesh
+        ------
+        mannings_n_file: str, path-like
+            path to Mannings n file. It must be a file with three columns: x, y, z
+        """
+        try:
+            if mannings_n_file is None:
+                raise FileNotFoundError
+            mannings_n = np.loadtxt(mannings_n_file)
+            self.mannings_n = interpolate_variable(self.face_xy, mannings_n[:,:2], mannings_n[:,2], method='nearest')
+        except FileNotFoundError:
+            print(f"Could not find the Mannings n file {mannings_n_file}. Setting Mannings n to zeros.")
+            self.mannings_n = np.zeros_like(self.face_area)
+
     def plot_boundary(self, ax=None, **plt_kwargs):
         '''Plot the boundary of the mesh'''
         ax = ax or plt.gca()
@@ -1539,7 +1554,7 @@ def update_ghost_cells_attributes(mesh, *attributes):
 
     return attributes
 
-def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2, source_BC=[[BC_Datasource.INDEX, 0]],
+def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2, source_BC=[[BC_Datasource.INDEX, 0]], mannings_n_file=None,
                         with_multiscale=False, number_of_multiscales=4,
                         neighborhood_size_slope=150, min_neighbours_slope=5,
                         multiscale_mesh_file=None, raw_meshes=None, template_only=False):
@@ -1558,6 +1573,8 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
         type of boundary condition (1: water level, 2: discharge)
     source_BC: list
         list of (data source, value) pairs for each BC node (e.g., [[BC_Datasource.INDEX, 0], [BC_Datasource.VALUE, 0.123], ...])
+    mannings_n_file: str, path-like
+        path to mannings n file
     with_multiscale: bool
         if True, data.mesh is a list of multiscale meshes
     number_of_multiscales: int
@@ -1586,10 +1603,12 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
     mesh = Mesh()
     mesh._import_from_map_netcdf(netcdf_file)
     mesh._import_DEM(DEM_file)
+    mesh._import_mannings_n(mannings_n_file)
     DEM = mesh.DEM
+    mannings_n = mesh.mannings_n
     mesh = add_ghost_cells_mesh(mesh)
 
-    attributes = (DEM,) if template_only else (DEM, WD, VX, VY)
+    attributes = (DEM,mannings_n) if template_only else (DEM, mannings_n, WD, VX, VY)
 
     if with_multiscale:
         # create multiscale meshes
@@ -1628,9 +1647,11 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
         attributes = add_ghost_cells_attributes(mesh.meshes[0], *attributes) # Was originally immediately before mesh.stack_meshes(meshes), but placing it here is logically equivalent
         attributes = pool_multiscale_attributes(mesh, *attributes, reduce='mean')
         mesh.DEM = update_ghost_cells_attributes(mesh, attributes[0])[0] #correct ghost cells values after pooling
+        mesh.mannings_n = update_ghost_cells_attributes(mesh, attributes[1])[0] #correct ghost cells values after pooling
     else:
         attributes = add_ghost_cells_attributes(mesh, *attributes)
         mesh.DEM = attributes[0]
+        mesh.mannings_n = attributes[1]
     # slope_x, slope_y = get_slopes(mesh.face_xy, mesh.DEM, neighborhood_size=neighborhood_size_slope, 
     #                                   min_neighbours=min_neighbours_slope)
     
@@ -1672,8 +1693,9 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
 def create_mesh_dataset(dataset_folder, sim_ids=[], 
                         with_multiscale=False, number_of_multiscales=4,
                         neighborhood_size_slope=150, min_neighbours_slope=9,
-                        netcdf_file_template='output_{}_map.nc', DEM_file_template='dyce_lisfloodfp',
+                        netcdf_file_template='output_{}_map.nc', DEM_file_template='dyce_lisfloodfp.xyz',
                         hydrograph_file_template='Hydrograph_{}.txt', polygon_file_template='dyce_polygon.pol',
+                        mannings_n_file_template='dyce_mannings_n.xyz',
                         multiscale_mesh_file=None, raw_meshes=None, type_BC=2, source_BC=[[BC_Datasource.INDEX, 0]], template_only=False
                         ):
     '''
@@ -1707,6 +1729,7 @@ def create_mesh_dataset(dataset_folder, sim_ids=[],
     for i in tqdm(sim_ids):
         netcdf_file = os.path.join(dataset_folder, 'Simulations', netcdf_file_template.format(i))
         DEM_file = os.path.join(dataset_folder,'DEM',DEM_file_template.format(i))
+        mannings_n_file = os.path.join(dataset_folder, 'Mannings_n', mannings_n_file_template.format(i))
 
         if template_only:
             BC = None
@@ -1719,7 +1742,7 @@ def create_mesh_dataset(dataset_folder, sim_ids=[],
         if netcdf_file.endswith(".zst"):
             os.system(f"zstd -df {netcdf_file}")
             netcdf_file = netcdf_file.rstrip(".zst")
-        data = convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file, type_BC=type_BC, source_BC=source_BC,
+        data = convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file, type_BC=type_BC, source_BC=source_BC, mannings_n_file=mannings_n_file,
                         with_multiscale=with_multiscale, number_of_multiscales=number_of_multiscales,
                         neighborhood_size_slope=neighborhood_size_slope, 
                         min_neighbours_slope=min_neighbours_slope, multiscale_mesh_file=multiscale_mesh_file,
