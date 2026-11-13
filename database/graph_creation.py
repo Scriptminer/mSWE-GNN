@@ -1655,8 +1655,8 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
     # slope_x, slope_y = get_slopes(mesh.face_xy, mesh.DEM, neighborhood_size=neighborhood_size_slope, 
     #                                   min_neighbours=min_neighbours_slope)
     
-    DEM = attributes[0]
     data.DEM = torch.FloatTensor(mesh.DEM)
+    data.mannings_n = torch.FloatTensor(mesh.mannings_n)
     if not template_only:
         WD, VX, VY = attributes[1:]
         data.WD = torch.FloatTensor(WD)
