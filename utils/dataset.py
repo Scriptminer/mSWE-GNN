@@ -21,7 +21,7 @@ def process_attr(attribute, scaler=None, to_min=False, device='cpu'):
     to_min: bool
         if True, shifts minimum to zero before scaling
     '''
-    assert isinstance(attribute, torch.Tensor), "Input attribute is not a tensor"
+    assert isinstance(attribute, torch.Tensor), f"Input attribute is not a tensor. Expected torch.Tensor, got type {type(attribute)}"
     
     if attribute.dim() == 1:
         attribute = attribute.reshape(-1,1)
@@ -270,7 +270,7 @@ def create_data_attr(datasets, scalers=None, temporal_res=60, original_temporal_
         temp.edge_attr = get_edge_features(data, scalers=scalers, **selected_edge_features, device=device)
         temp.x = get_node_features(data, **selected_node_features, scalers=scalers, device=device)
         temp.DEM = data.DEM
-        temp.mannings_n = data.mesh.mannings_n
+        temp.mannings_n = data.mannings_n
         temp.temporal_res = temporal_res
         temp.area = data.area.to(device)
         if 'BC' in data.keys():
