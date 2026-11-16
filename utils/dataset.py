@@ -525,13 +525,14 @@ def apply_boundary_condition(x_d, BC, node_BC, type_BC=2, volume_diff=None, face
         nodes_matching_type = node_BC[type_BC == type_BC_value]
         BC_matching_type = BC[type_BC == type_BC_value]
         if volume_diff is not None:
-            volume_multiplier = face_BC_area[type_BC == type_BC_value] / temporal_res_seconds if type_BC_value == 1 else 1 # Depths are multiplied by cell area, and divided by the number of seconds over which that depth is adjusted to the BC depth value, to give discharge
-            volume_diff[type_BC == type_BC_value] = (BC_matching_type - x_d[nodes_matching_type, (type_BC_value-1)::NUM_WATER_VARS])[:,-1] * volume_multiplier
-            #if type_BC_value == 1 and torch.abs(volume_diff).max() > 0:
-            #    print(f"BC: {BC[:10]}, x_d: {x_d[node_BC[:10]]}, volume_diff: {volume_diff[:10]}")
+            if type_BC_value == 1: # Water depth boundary condition
+                volume_multiplier = face_BC_area[type_BC == type_BC_value] / temporal_res_seconds # Depths are multiplied by cell area, and divided by the number of seconds over which that depth is adjusted to the BC depth value, to give discharge
+                volume_diff[type_BC == type_BC_value] = (BC_matching_type - x_d[nodes_matching_type, (type_BC_value-1)::NUM_WATER_VARS])[:,-1] * volume_multiplier # Change in volume is determined by the change in water depth
+            elif type_BC_value == 2: # Discharge boundary condition
+                volume_diff[type_BC == type_BC_value] = BC_matching_type # Change in volume is determined by the discharge alone, not the difference between discharge values
+
         x_d[nodes_matching_type, (type_BC_value-1)::NUM_WATER_VARS] = BC_matching_type
-    #print(f"type_BC: {type_BC[:10]}, BC: {BC[:10]}, x_d: {x_d[node_BC[:10]]}, volume_diff: {volume_diff[:10]}")    
-    #print(volume_diff[:10])
+    
     return x_d
 
 def check_type_BC(type_BC, num_water_vars):
