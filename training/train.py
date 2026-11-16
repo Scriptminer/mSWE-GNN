@@ -73,7 +73,7 @@ def update_batch_multiscale(batch):
     batch.intra_mesh_edge_index = torch.cat(intra_mesh_edge_index,1)
 
 @torch.no_grad()
-def rollout_test(model, batch):
+def rollout_test(model, batch, save_volume_diff=False):
     '''
     Function that tests a model and returns the rollout prediction
     ------
@@ -91,15 +91,15 @@ def rollout_test(model, batch):
     assert temp.x.shape[-1] >= dynamic_vars, "The number of dynamic variables is greater than the number of node features"
     final_step = batch.y.shape[-1]
     predicted_rollout = []
+    volume_diff = torch.zeros((final_step, temp.node_BC), dtype=temp.x.dtype)
 
     for time_step in range(final_step):
         #print(f"temp.x[temp.node_BC] before: {temp.x[temp.node_BC]}")
-        volume_diff = torch.zeros_like(temp.node_BC, dtype=temp.x.dtype)
         #print(f"temp.area.shape: {temp.area.shape}, BCarea: {temp.area[temp.node_BC]}")
         temp.x[:,-dynamic_vars:] = apply_boundary_condition(temp.x[:,-dynamic_vars:], 
                                                             temp.BC[:,:,time_step], 
                                                             temp.node_BC, type_BC=temp.type_BC,
-                                                            volume_diff=volume_diff,
+                                                            volume_diff=volume_diff[time_step],
                                                             face_BC_area=temp.area[temp.node_BC],
                                                             temporal_res_seconds=10)
         #print(f"temp.x[temp.node_BC] after: {temp.x[temp.node_BC]}")
@@ -107,7 +107,9 @@ def rollout_test(model, batch):
         pred = model(temp)
         temp.x = use_prediction(temp.x, pred, model.previous_t)
         predicted_rollout.append(pred)
-    
+
+    if save_volume_diff:
+        torch.Tensor.numpy(volume_diff, force=True).savez_compressed(f"volume_diff_{time.time().strftime('%Y%m%d-%H%M%S-%f')[:-3]}.npz", volume_diff)
     return torch.stack(predicted_rollout, -1)
 
 class LightningTrainer(L.LightningModule):
@@ -224,7 +226,7 @@ class LightningTrainer(L.LightningModule):
         self.log("val_CSI_03", CSI_03, prog_bar=False)
 
     def predict_step(self, batch, batch_idx):     
-        predicted_rollout = rollout_test(self.model, batch)
+        predicted_rollout = rollout_test(self.model, batch, save_volume_diff=True)
         return [predicted_rollout[batch.ptr[i]:batch.ptr[i+1]] 
                 for i in range(batch.num_graphs)]
 

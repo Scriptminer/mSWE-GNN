@@ -191,7 +191,7 @@ def main(config, checkpoint_path):
         with open(f"{title}.pkl", "wb") as f:
             pickle.dump(predicted_rollout, f)
         with open(f"{title}.json", "w") as f:
-            json.dump({"inference_config": config, "checkpoint": checkpoint_path}, f)
+            json.dump({"inference_config": config.as_dict(), "checkpoint": checkpoint_path}, f)
     else:
         with open("predictions1781959069.6740851.pkl", "rb") as f:
             predicted_rollout = pickle.load(f)
