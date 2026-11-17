@@ -1292,17 +1292,18 @@ def get_BC_edge_index(dual_edge_index, face_BC, undirected_BC=False):
         contains a list of edges of the dual graph
     face_BC: np.array
         contains a list of boundary faces (faces with boundary conditions)
-    undirected_BC: bool
+    undirected_BC: bool or np.array, shape (num_faces_BC,)
         if True, the information flow can go also to ghost nodes
     """
     num_faces = dual_edge_index.max() + 1
     dual_edge_index_BC = []
     ghost_cells_ids = []
+    undirected_BC = torch.broadcast_to(undirected_BC, (len(face_BC),)) if isinstance(undirected_BC, bool) else undirected_BC
 
     for i, face in enumerate(face_BC):
         dual_edge_index_BC.append([num_faces+i, face])
         ghost_cells_ids.append(num_faces+i)
-        if undirected_BC:
+        if undirected_BC[i]:
             dual_edge_index_BC.append([face, num_faces+i])
 
     return np.array(dual_edge_index_BC).T, np.array(ghost_cells_ids)
@@ -1409,7 +1410,7 @@ def find_face_BC(mesh):
 
     return np.array(face_BC)
 
-def add_ghost_cells_mesh(mesh):
+def add_ghost_cells_mesh(mesh, undirected_BC=True):
     """Adds ghost cells to the mesh by mirroring the boundary faces and nodes w.r.t. the boundary edges
     
     Updates:
@@ -1421,6 +1422,9 @@ def add_ghost_cells_mesh(mesh):
     dual_edge_index: np.array, shape (2, num_dual_edges+num_ghost_dual_edges)
         this is also converted to undirected
     face_nodes
+
+    undirected_BC: bool or np.array, shape (num_faces_BC,)
+        if True, the information flow can go also to ghost nodes
 
     Expects that mesh.edge_index_BC and mesh.face_BC are parallel arrays referring to the same boundary edges and corresponding boundary faces.
     """
@@ -1470,7 +1474,7 @@ def add_ghost_cells_mesh(mesh):
         # update edge_index and dual_edge_index after adding ghost cells
         # dual_edge_index is converted to undirected
         mesh.dual_edge_index_BC, mesh.ghost_cells_ids = get_BC_edge_index(mesh.dual_edge_index, 
-                                                                mesh.face_BC, undirected_BC=False)
+                                                                mesh.face_BC, undirected_BC=undirected_BC)
         mesh.dual_edge_index = np.concatenate((mesh.dual_edge_index, mesh.dual_edge_index_BC), 1)
         ghost_edge_index, ghost_face_nodes = get_ghost_nodes(mesh)
         mesh.edge_index = np.concatenate((mesh.edge_index, ghost_edge_index), 1)
@@ -1606,7 +1610,8 @@ def convert_mesh_to_pyg(netcdf_file, DEM_file, BC, polygon_file=None, type_BC=2,
     mesh._import_mannings_n(mannings_n_file)
     DEM = mesh.DEM
     mannings_n = mesh.mannings_n
-    mesh = add_ghost_cells_mesh(mesh)
+    undirected_BC = (type_BC!=2) # Discharge (type_BC==2) ghost cells are linked to the mesh by directed edges (information can flow out of ghost cells only), water level ghost cells (type_BC==2) are linked by undirected edges (information can flow in both directions)
+    mesh = add_ghost_cells_mesh(mesh, undirected_BC=undirected_BC)
 
     attributes = (DEM,mannings_n) if template_only else (DEM, mannings_n, WD, VX, VY)
 
