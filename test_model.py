@@ -187,7 +187,7 @@ def main(config, checkpoint_path):
     NEW_PREDICTION = True 
     if NEW_PREDICTION:
         predicted_rollout = trainer.predict(plmodule, dataloaders=test_dataloader)
-        title = f"predictions_{os.path.basename(checkpoint_path).replace('.ckpt','')}_{time.time()}"
+        title = f"predictions_{os.path.basename(checkpoint_path).replace('.ckpt','')}_{time.strftime('%Y-%m-%d-%H%M')}"
         with open(f"{title}.pkl", "wb") as f:
             pickle.dump(predicted_rollout, f)
         with open(f"{title}.json", "w") as f:
