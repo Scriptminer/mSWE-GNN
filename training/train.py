@@ -91,7 +91,7 @@ def rollout_test(model, batch, save_volume_diff=False):
     assert temp.x.shape[-1] >= dynamic_vars, "The number of dynamic variables is greater than the number of node features"
     final_step = batch.y.shape[-1]
     predicted_rollout = []
-    volume_diff = torch.zeros((final_step, temp.node_BC), dtype=temp.x.dtype)
+    volume_diff = torch.zeros((final_step, len(temp.node_BC)), dtype=temp.x.dtype, device=temp.x.device)
 
     for time_step in range(final_step):
         #print(f"temp.x[temp.node_BC] before: {temp.x[temp.node_BC]}")
@@ -109,7 +109,7 @@ def rollout_test(model, batch, save_volume_diff=False):
         predicted_rollout.append(pred)
 
     if save_volume_diff:
-        torch.Tensor.numpy(volume_diff, force=True).savez_compressed(f"volume_diff_{time.time().strftime('%Y%m%d-%H%M%S-%f')[:-3]}.npz", volume_diff)
+        np.savez_compressed(f"predictions_volume_diff_{time.strftime('%Y-%m-%d-%H%M')}.npz", volume_diff=torch.Tensor.numpy(volume_diff, force=True))
     return torch.stack(predicted_rollout, -1)
 
 class LightningTrainer(L.LightningModule):

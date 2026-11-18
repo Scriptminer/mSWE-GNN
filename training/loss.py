@@ -126,7 +126,7 @@ def loss_function(preds, real, data, BC, type_loss='RMSE', only_where_water=Fals
             # No theoretical volume delta specified, assume model has no outflows and use regular conservation loss.
             conservation_loss = conservation_loss(pred_WD, input_WD, data, BC).abs()
         if log_fn:
-            log_fn("conservation_loss", conservation_loss, on_step=True)
+            log_fn("conservation_loss", conservation_loss, on_step=True, prog_bar=True)
         loss = loss + conservation*conservation_loss
 
     return loss
