@@ -1314,23 +1314,23 @@ def get_ghost_nodes(mesh):
     ghost_edge_index = []
     ghost_face_nodes = []
 
-    ghost_nodes = mesh.nodes_per_face[mesh.face_BC]-2 # Number of ghost nodes associated with each BC edge is determined by the shape of the boundary cell of which it is a part. E.g., if it is a triangle (nodes_per_face=3), 1 ghost node is required to make a mirrored triangle.
-    num_ghost_nodes = ghost_nodes.sum()
-    mesh.ghost_node_ids = [mesh.node_x.shape[0]-j-1 for j in range(num_ghost_nodes)][::-1] # Ghost nodes are appended to the regular list of nodes (of length mesh.node_x.shape[0]), so their indices are the last num_ghost_nodes node indices
-
+    n_ghost_nodes = mesh.nodes_per_face[mesh.face_BC]-2 # Number of ghost nodes associated with each BC edge/face is determined by the shape of the boundary cell of which it is a part. E.g., if it is a triangle (nodes_per_face=3), 1 ghost node is required to make a mirrored triangle, for a quadrilateral, 2 are required.
+    total_num_ghost_nodes = n_ghost_nodes.sum() # Total number of ghost nodes
+    mesh.ghost_node_ids = [mesh.node_x.shape[0]-j-1 for j in range(total_num_ghost_nodes)][::-1] # Ghost nodes are appended to the regular list of nodes (of length mesh.node_x.shape[0]), so their indices are the last num_ghost_nodes node indices
+    
     for i in range(num_BC_faces):
-        # TODO: verify logic of the below line works with >3 nodes
-        ghost_edge_index.append([mesh.ghost_node_ids[i], mesh.edge_index_BC[i,0]]) # Append an edge connecting the i-th ghost node to the beginning of the current boundary edge
+        gn_idx = n_ghost_nodes[:i].sum() # Index into ghost_node_ids
+        ghost_edge_index.append([mesh.ghost_node_ids[gn_idx], mesh.edge_index_BC[i,0]]) # Append an edge connecting the i-th ghost node to the beginning of the current boundary edge
 
         # loop for polygons with more than 3 nodes
-        for j in range(ghost_nodes[i]-1):
-            ghost_edge_index.append([mesh.ghost_node_ids[i+j], mesh.ghost_node_ids[i+j+1]])
+        for j in range(n_ghost_nodes[i]-1):
+            ghost_edge_index.append([mesh.ghost_node_ids[gn_idx+j], mesh.ghost_node_ids[gn_idx+j+1]])
+        
+        ghost_edge_index.append([mesh.edge_index_BC[i,1], mesh.ghost_node_ids[gn_idx + n_ghost_nodes[i] - 1]]) # Connect the end of the current boundary edge to the last ghost node associated with this edge (?)
+        # TODO check below logic for >3 nodes gets the nodes forming ghost faces in the correct order (e.g., has non-crossing edges)
+        ghost_face_nodes += mesh.ghost_node_ids[gn_idx : gn_idx+n_ghost_nodes[i]] + mesh.edge_index_BC[i][::-1].tolist() # Append a shape with all ghost nodes associated with this BC face (1 for triangle ghost face, 2 for quadrilateral ghost face), plus the two nodes of the current boundary edge
 
-        ghost_edge_index.append([mesh.edge_index_BC[i,1], mesh.ghost_node_ids[ghost_nodes[:i+1].sum()-1]]) # Connect the end of the current boundary edge to the last ghost node associated with this edge (?)
-        ghost_face_nodes.append([mesh.ghost_node_ids[i]] + mesh.edge_index_BC[i].tolist()) # TODO: this line's logic definitely doesn't work with >3 nodes
-
-    print(f"ghost_edge_index: {ghost_edge_index}, ghost_face_nodes: {ghost_face_nodes}")
-    return np.array(ghost_edge_index).T, np.array(ghost_face_nodes).reshape(-1)
+    return np.array(ghost_edge_index).T, np.array(ghost_face_nodes)
 
 def find_BC_other_nodes(mesh):
     """Returns the coordinates of the nodes that are in the boundary faces but not in the boundary edges"""
@@ -1440,11 +1440,12 @@ def add_ghost_cells_mesh(mesh, undirected_BC=True):
         edge_outward_normal_faces = mesh.edge_outward_normal[mesh.edge_BC]
 
         # nodes are mirrored w.r.t. edge center (triangles) or edge nodes (quatrilaterals)
-        node_symmetry_point = np.concatenate([item.mean(0) if mesh.nodes_per_face[mesh.face_BC][i] == 3
-                                        else item for i, item in enumerate(mesh.node_xy[mesh.edge_index_BC])]).reshape(-1,2)
+        # Triangles have a single node_symmetry_point, while quadrilaterals have two node_symmetry_points (the two nodes of the edge)
+        node_symmetry_point = np.concatenate([symmetry_point for symmetry_points in [ [item.mean(0)] if mesh.nodes_per_face[mesh.face_BC][i] == 3
+                                        else item for i, item in enumerate(mesh.node_xy[mesh.edge_index_BC])] for symmetry_point in symmetry_points]).reshape(-1,2)
 
-        edge_outward_normal_nodes = np.concatenate([np.repeat(item.reshape(1,-1), 2, axis=0) if mesh.nodes_per_face[mesh.face_BC][i] == 4
-                                        else item for i, item in enumerate(mesh.edge_outward_normal[mesh.edge_BC])]).reshape(-1,2)
+        edge_outward_normal_nodes = np.concatenate([normal for normals in [np.repeat(item.reshape(1,-1), 2, axis=0) if mesh.nodes_per_face[mesh.face_BC][i] == 4
+                                        else [item] for i, item in enumerate(mesh.edge_outward_normal[mesh.edge_BC])] for normal in normals]).reshape(-1,2)
 
         distance_face_edge_BC = np.linalg.norm((face_BC_xy - face_symmetry_point), axis=1).reshape(-1,1)
         distance_node_edge_BC = np.linalg.norm((node_BC_xy - node_symmetry_point), axis=1).reshape(-1,1)
